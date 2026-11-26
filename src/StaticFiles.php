@@ -33,7 +33,7 @@ final class StaticFiles
         header('Cache-Control: no-cache');
         header('Referrer-Policy: same-origin');
         $ancestors = getenv('FORBIRDS_ALLOW_EMBED') === '1' ? '' : "; frame-ancestors 'none'";
-        header("Content-Security-Policy: default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'" . $ancestors);
+        header("Content-Security-Policy: default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" . $ancestors);
         if ($method !== 'HEAD') {
             readfile($resolved);
         }

@@ -78,7 +78,21 @@ async function loadSections() {
   for (const section of sections) {
     const details = node('details');
     const summary = node('summary'); summary.append(link(section.title + (section.is_archived ? ' [архив]' : ''), '/index.html?section_id=' + section.id));
-    details.append(summary, node('p', section.description)); side.append(details);
+    details.className = 'section-item'; details.open = true;
+    details.append(summary);
+    if (section.description) details.append(node('p', section.description, 'section-description'));
+    const recent = node('ol', null, 'section-recent'); recent.setAttribute('aria-label', 'Последние сообщения: ' + section.title);
+    for (const item of section.recent_posts || []) {
+      const row = node('li');
+      const a = link(`${item.is_root ? 'Тема' : 'Ответ'}: ${item.title}`, item.url);
+      a.title = `${item.username || 'Аноним'} · ${date(item.created_at)}`;
+      row.append(a, node('span', item.excerpt, 'section-excerpt'));
+      if (item.status === 'pending') row.append(node('span', labels.pending, 'post-status'));
+      recent.append(row);
+    }
+    if (recent.childElementCount) details.append(recent);
+    else details.append(node('p', 'Сообщений пока нет.', 'section-description'));
+    side.append(details);
   }
   const select = $('#section-select');
   if (select) {
@@ -129,6 +143,41 @@ async function profile(id) {
   dialog.addEventListener('close', () => dialog.remove(), { once: true });
   document.body.append(dialog); dialog.showModal();
 }
+function showImage(file) {
+  if ($('.image-viewer')) return;
+  const dialog = node('dialog', null, 'image-viewer');
+  dialog.setAttribute('aria-label', 'Просмотр изображения: ' + file.original_name);
+  const header = node('div', null, 'image-viewer-header');
+  const close = button('Закрыть', async () => dialog.close());
+  header.append(node('strong', file.original_name), link('Скачать оригинал', file.download_url), close);
+  const status = node('p', 'Загрузка изображения…'); status.setAttribute('role', 'status');
+  const stage = node('div', null, 'image-viewer-stage');
+  const image = node('img'); image.alt = file.original_name;
+  image.addEventListener('load', () => { status.hidden = true; });
+  image.addEventListener('error', () => { status.hidden = false; status.textContent = 'Не удалось загрузить изображение. Возможно, доступ к сообщению изменился.'; });
+  stage.append(image); dialog.append(header, status, stage);
+  const focused = document.activeElement;
+  dialog.addEventListener('close', () => {
+    image.removeAttribute('src'); dialog.remove(); document.body.classList.remove('viewer-open');
+    if (focused?.isConnected) focused.focus({ preventScroll: true });
+  }, { once: true });
+  dialog.addEventListener('click', event => {
+    const bounds = dialog.getBoundingClientRect();
+    if (event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) dialog.close();
+  });
+  document.body.append(dialog); document.body.classList.add('viewer-open');
+  dialog.showModal(); close.focus(); image.src = file.view_url;
+}
+function videoPlayer(file) {
+  const video = node('video', null, 'attachment-video');
+  video.controls = true; video.preload = 'none'; video.playsInline = true;
+  video.setAttribute('aria-label', 'Видео: ' + file.original_name);
+  video.src = file.view_url;
+  const fallback = node('p', 'Если браузер не поддерживает кодек этого видео, скачайте оригинал.', 'video-help');
+  fallback.hidden = true;
+  video.addEventListener('error', () => { fallback.hidden = false; });
+  const player = node('div'); player.append(video, fallback); return player;
+}
 function flagBadge(flag) {
   const badge = node('span', null, 'user-flag');
   const image = node('img'); image.src = flag.url; image.alt = ''; image.title = flag.label;
@@ -161,10 +210,14 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   if (item.attachments?.length) {
     const files = node('div', null, 'attachments');
     for (const file of item.attachments) {
-      const box = node('div', null, (file.is_image ? 'image-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
+      const box = node('div', null, (file.is_image ? 'image-box' : file.is_video ? 'video-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
       if (file.is_image) {
         const open = link('', file.view_url);
-        open.target = '_blank'; open.rel = 'noopener';
+        open.setAttribute('aria-haspopup', 'dialog');
+        open.addEventListener('click', event => {
+          if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          event.preventDefault(); showImage(file);
+        });
         open.setAttribute('aria-label', (file.spoiler ? 'Открыть изображение под спойлером: ' : 'Открыть изображение: ') + file.original_name);
         const image = node('img', null, file.spoiler ? 'spoiler-marker img2x' : 'attachment-preview');
         image.src = file.spoiler ? '/static/preview/spolier.png' : file.preview_url;
@@ -172,6 +225,17 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
         image.loading = 'lazy';
         open.append(image); box.append(open, node('div', file.original_name));
         box.append(link('Скачать полноразмерную картинку', file.download_url));
+      } else if (file.is_video) {
+        if (file.spoiler) {
+          const details = node('details'), summary = node('summary', 'Видео под спойлером: ' + file.original_name);
+          details.append(summary);
+          details.addEventListener('toggle', () => {
+            if (details.open && !details.querySelector('video')) details.append(videoPlayer(file));
+            if (!details.open) details.querySelector('video')?.pause();
+          });
+          box.append(details);
+        } else box.append(node('div', file.original_name), videoPlayer(file));
+        box.append(link('Скачать видео: ' + file.original_name, file.download_url));
       } else {
         const icon = node('img', null, 'img2x'); icon.src = '/icons/file.png'; icon.alt = '';
         box.append(icon);
@@ -198,7 +262,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
         try {
           await post(`/posts/${item.id}/moderate`, { action });
           notify(`Сообщение №${item.id}: ${labels[{ approve: 'approved', unapprove: 'pending', reject: 'rejected', delete: 'deleted' }[action]]}`, false);
-          await loadView(); await loadNews();
+          await loadView(); await loadNews(); await loadSections();
         } finally { if (b.isConnected) b.disabled = false; }
       });
       b.disabled = (action === 'approve' && item.status === 'approved') || (action === 'unapprove' && item.status === 'pending');
@@ -510,6 +574,7 @@ class Composer {
       }
       notify(message, false);
       if (this.threadId) await loadThread().catch(notify);
+      await loadSections().catch(notify);
       await this.refreshStatus().catch(notify);
     } catch (error) {
       $('#post-result').textContent = error.message;

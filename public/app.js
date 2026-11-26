@@ -1,5 +1,5 @@
 import { t, locale, initLanguage } from '/i18n.js';
-import { browserSignal } from '/fingerprint.js';
+import { browserSignal } from '/ujutnenko.js';
 import { moderationUI } from '/moderation.js';
 await initLanguage();
 

@@ -12,22 +12,18 @@
   <header>
     <div class="sub">
       <form id="auth-form" action="/api/auth/login" method="post">
-        <label>Имя <input name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+"></label>
-        <label>Пароль <input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72"></label>
+        Вход <input aria-label="Имя пользователя" placeholder="имя пользователя" name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+">
+        <input aria-label="Пароль" placeholder="пароль" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72">
         <button name="action" value="login">Войти</button>
         <button name="action" value="register">Регистрация</button>
       </form>
       <div id="account" hidden><span id="account-name"></span> <button id="logout" type="button">Выйти</button></div>
     </div>
-    <div class="banner"><a href="/">ForBirds</a><p>Лёгкий форум. Каждому слову — своё гнездо.</p></div>
-    <nav class="site-nav" aria-label="Навигация">
-      <a href="/">Главная</a> · <a href="/index.html?view=all">Все темы</a> ·
-      <a href="/dashboard.html">Создать тему</a> · <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
-      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
-    </nav>
+    <div class="banner"><a class="banner-placeholder" href="/" aria-label="На главную">banner placeholder</a></div>
+
     <div class="title">Поиск</div>
     <form id="search-form" action="/index.html" method="get">
-      <label>По форуму <input name="q" type="search" required minlength="2" maxlength="200"></label>
+      <input aria-label="Поиск по форуму" name="q" type="search" required minlength="2" maxlength="200">
       <button>Искать</button>
     </form>
     <div class="title">Обновления</div>
@@ -37,15 +33,29 @@
   <noscript><p>Для форм и локальной хэш-капчи необходим JavaScript. Вычисления выполняются только после нажатия кнопки проверки.</p></noscript>
   <div class="title" id="page-title">Главная</div>
   <table class="main-layout"><tbody><tr>
-    <td class="sidebar"><nav class="sidebar-scroll" id="sections" aria-label="Разделы">Загрузка разделов…</nav></td>
+    <td class="sidebar">
+    <nav class="site-nav" aria-label="Навигация">
+      <a href="/">Главная</a> · <a href="/index.html?view=all">Все темы</a> ·
+      <a href="/dashboard.html">Создать тему</a> · <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
+      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
+    </nav>
+      <nav class="sidebar-scroll" id="sections" aria-label="Разделы">Загрузка разделов…</nav></td>
     <td class="main-content">
+      <hr>
+      <div class="scroll">
 
       <p id="feed-description"></p>
       <div id="feed" aria-live="polite">Загрузка тем…</div>
       <nav id="pagination" class="pagination" aria-label="Страницы"></nav>
 
+      </div>
     </td>
   </tr></tbody></table>
-  <footer><div class="title">Информация</div><p>— ForBirds Software 1.0 —</p></footer>
+  <footer>
+    <div class="title">Информация</div>
+    <table class="footer-table"><tbody><tr>
+      <td><hr></td><td>ForBirds Software 1.0</td><td><hr></td>
+    </tr></tbody></table>
+  </footer>
 </body>
 </html>

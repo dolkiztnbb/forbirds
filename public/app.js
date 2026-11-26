@@ -431,22 +431,22 @@ function adminSections() {
       form.reset(); await loadSections(); options(); notify('Раздел создан.', false); composer?.controls();
     } catch (e) { notify(e); } finally { submit.disabled = false; }
   });
-  const formEdit = node('form'), title = node('h2', 'Настроить раздел'), select = node('select');
-  const titleInput = node('input'), description = node('textarea'), archived = node('input');
-  titleInput.required = true; titleInput.maxLength = 200; description.maxLength = 4000; archived.type = 'checkbox';
+  const formEdit = $('#section-settings-form'), select = formEdit.elements.section_id;
+  const titleInput = formEdit.elements.title, description = formEdit.elements.description, archived = formEdit.elements.is_archived;
+  const save = formEdit.querySelector('button');
   function options() {
+    const selected = select.value;
     select.replaceChildren();
     for (const s of sections) { const option = node('option', s.title); option.value = s.id; select.append(option); }
+    if (sections.some(s => String(s.id) === selected)) select.value = selected;
     fill();
   }
   function fill() {
     const section = sections.find(s => String(s.id) === select.value);
     titleInput.value = section?.title || ''; description.value = section?.description || ''; archived.checked = !!section?.is_archived;
+    for (const control of [select, titleInput, description, archived, save]) control.disabled = !section;
   }
-  for (const [text, element] of [['Раздел', select], ['Название', titleInput], ['Описание', description], ['Архивный раздел', archived]]) {
-    const label = node('label', text); label.append(element); formEdit.append(label);
-  }
-  const save = node('button', 'Сохранить'); formEdit.append(save); select.addEventListener('change', fill);
+  select.addEventListener('change', fill);
   formEdit.addEventListener('submit', async event => {
     event.preventDefault(); if (!select.value) return;
     save.disabled = true;
@@ -455,7 +455,7 @@ function adminSections() {
       await loadSections(); options(); notify('Настройки раздела сохранены.', false);
     } catch (error) { notify(error); } finally { save.disabled = false; }
   });
-  $('#section-admin').append(title, formEdit); options();
+  options();
 }
 
 $('#auth-form').addEventListener('submit', async event => {

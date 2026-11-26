@@ -173,10 +173,68 @@ const path = require('node:path');
     await guest.getByRole('link', { name: 'Browser registered topic', exact: true }).waitFor();
     await guest.setViewportSize({ width: 375, height: 812 });
     assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+
+    // Section forms share the composer layout and retain real create/edit behavior.
+    await administrator.goto(base + '/dashboard.html');
+    const createSection = administrator.locator('#section-form');
+    const editSection = administrator.locator('#section-settings-form');
+    await createSection.waitFor();
+    await administrator.waitForLoadState('networkidle');
+    assert.equal(await createSection.locator('> .composer-table').count(), 1);
+    assert.equal(await editSection.locator('> .composer-table').count(), 1);
+    await createSection.getByLabel('Название', { exact: true }).fill('Наблюдение за птицами');
+    await createSection.getByLabel('Адрес раздела', { exact: true }).fill('Invalid Address');
+    assert.equal(await createSection.evaluate(f => f.checkValidity()), false);
+    await createSection.getByLabel('Адрес раздела', { exact: true }).fill('bird-talk');
+    await createSection.getByLabel('Описание', { exact: false }).fill('Где и как наблюдать за птицами.');
+    await createSection.getByRole('button', { name: 'Добавить раздел' }).click();
+    await administrator.locator('#notice').filter({ hasText: 'Раздел создан.' }).waitFor();
+    assert.equal(await createSection.getByLabel('Название', { exact: true }).inputValue(), '');
+    await administrator.locator('#section-select option').filter({ hasText: 'Наблюдение за птицами' }).waitFor({ state: 'attached' });
+    await editSection.getByLabel('Раздел', { exact: true }).selectOption({ label: 'Наблюдение за птицами' });
+    assert.equal(await editSection.getByLabel('Описание', { exact: false }).inputValue(), 'Где и как наблюдать за птицами.');
+    const editedId = await editSection.getByLabel('Раздел', { exact: true }).inputValue();
+    await editSection.getByLabel('Название', { exact: true }).fill('Полевые наблюдения');
+    await editSection.getByLabel('Описание', { exact: false }).fill('Заметки и фотографии из поездок.');
+    await editSection.getByLabel('Архивный раздел', { exact: true }).check();
+    await editSection.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await administrator.locator('#notice').filter({ hasText: 'Настройки раздела сохранены.' }).waitFor();
+    assert.equal(await editSection.getByLabel('Раздел', { exact: true }).inputValue(), editedId);
+    await administrator.reload();
+    await administrator.waitForLoadState('networkidle');
+    await editSection.getByLabel('Раздел', { exact: true }).selectOption(editedId);
+    assert.equal(await editSection.getByLabel('Название', { exact: true }).inputValue(), 'Полевые наблюдения');
+    assert.equal(await editSection.getByLabel('Архивный раздел', { exact: true }).isChecked(), true);
+    await createSection.getByLabel('Название', { exact: true }).fill('Повтор');
+    await createSection.getByLabel('Адрес раздела', { exact: true }).fill('bird-talk');
+    await createSection.getByRole('button', { name: 'Добавить раздел' }).click();
+    await administrator.locator('#notice.error').waitFor();
+    assert.equal(await createSection.getByLabel('Название', { exact: true }).inputValue(), 'Повтор');
+    assert.equal(await createSection.getByRole('button').isEnabled(), true);
+    for (const width of [1280, 375]) {
+      await administrator.setViewportSize({ width, height: 900 });
+      assert.equal(await administrator.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      for (const form of [createSection, editSection]) {
+        const layout = await form.evaluate(f => {
+          const field = f.querySelector('.composer-body').getBoundingClientRect();
+          const actions = f.querySelector('.composer-options').getBoundingClientRect();
+          return { fieldRight: field.right, fieldBottom: field.bottom, actionsLeft: actions.left, actionsTop: actions.top };
+        });
+        if (width > 700) assert.ok(layout.actionsLeft >= layout.fieldRight - 1);
+        else assert.ok(layout.actionsTop >= layout.fieldBottom - 1);
+      }
+    }
+    await guest.goto(base + '/dashboard.html');
+    await guest.waitForLoadState('networkidle');
+    assert.equal(await guest.locator('#section-admin').isVisible(), false);
+    const modSettings = await page(await browser.newContext());
+    await login(modSettings, 'moderator');
+    assert.equal(await modSettings.locator('#section-admin').isVisible(), false);
+    await modSettings.close();
   } finally {
     await browser.close();
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(externalRequests, []);
-  console.log('Browser forms, worker PoW, uploads, feeds, premode and 45s/30s UI: OK');
+  console.log('Browser forms, section management, responsive layout, worker PoW, uploads, feeds, premode and 45s/30s UI: OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

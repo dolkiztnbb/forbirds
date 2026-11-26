@@ -1,0 +1,11 @@
+{
+  "name": "forbirds-frontend-tests",
+  "private": true,
+  "scripts": {
+    "test": "node tests/test_hash.cjs",
+    "test:browser": "FORBIRDS_BROWSER=1 python3 -m unittest discover -s tests -k test_browser -v"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.1"
+  }
+}

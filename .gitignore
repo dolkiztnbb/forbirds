@@ -1,0 +1,7 @@
+/.tools/
+/storage/
+/.env
+/node_modules/
+/vendor/
+__pycache__/
+*.pyc

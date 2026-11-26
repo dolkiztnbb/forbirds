@@ -54,7 +54,7 @@ table.main-layout {
     overflow-wrap: anywhere;        /* Принудительный перенос длинных слов */
     box-sizing: border-box;
     padding-right: 5px;
-    height: 640px;
+    height: 98;
 }
 .table th {
     border: 1px solid #333; /* Sets width, style, and color */
@@ -251,4 +251,10 @@ img {
     text-align: center; /* Ensures multi-line text stays centered */
     height: 100px;      /* Required so there is vertical space to center within */
     border: 1px dashed #636262;
+}
+
+.aligned-label {
+    min-width: 120px;
+    display: inline-block;
+    vertical-align: top;
 }

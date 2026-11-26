@@ -65,7 +65,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .pagination > * { margin-right: 10px; }
 .pagination:empty { display: none; }
 #section-admin { border-top: 1px solid #888; margin-top: 10px; }
-#section-admin label { display: block; margin: 5px 0; }
+  
 #section-admin input:not([type=checkbox]), #section-admin textarea { max-width: 100%; box-sizing: border-box; }
 .footer-table { margin: 0 auto; border-spacing: 0; }
 .footer-table td { padding: 5px; vertical-align: middle; }

@@ -80,28 +80,28 @@
               <td class="composer-options"><button id="post-submit" type="submit" disabled>Запостить</button></td>
             </tr>
           </tbody></table>
-          <fieldset class="pow-box"><legend>Локальная хэш-проверка</legend>
-            <p>Без внешних сервисов. Проверка использует процессор устройства и не доказывает, что вы человек.</p>
+          <fieldset class="pow-box"><legend>Turnstile-проверка</legend>
+            <p></p>
             <p id="cooldown" role="status"></p>
             <button id="pow-start" type="button" disabled>Вычислить проверку</button>
             <button id="pow-cancel" type="button" hidden>Отменить</button>
             <span id="pow-status" role="status" aria-live="polite">Загрузка условий публикации…</span>
           </fieldset>
-          <p>Все публикации проходят премодерацию, кроме сообщений доверенных участников и персонала.</p>
           <p id="post-result" role="status" aria-live="polite"></p>
         </form>
       </section>
 
       <section id="section-admin" hidden>
-        <h2>Создать раздел</h2>
+        <table class="post-table p composer-table"><tbody>
         <form id="section-form" action="/api/sections" method="post">
-          <label>Адрес <input name="slug" required maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="general"></label>
-          <label>Название <input name="title" required maxlength="200"></label>
-          <label>Описание <textarea name="description" maxlength="4000"></textarea></label>
+          <label class="aligned-label">Адрес </label><input name="slug" required maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="general">
+          <br>
+          <label class="aligned-label">Название </label><input name="title" required maxlength="200">
+          <br>
+          <label class="aligned-label">Описание </label><textarea name="description" maxlength="4000"></textarea>
           <button>Добавить раздел</button>
         </form>
       </section>
-
       </div>
     </td>
   </tr></tbody></table>

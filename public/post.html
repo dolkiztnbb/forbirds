@@ -81,14 +81,13 @@
               <td class="composer-options"><button id="post-submit" type="submit" disabled>Запостить</button></td>
             </tr>
           </tbody></table>
-          <fieldset class="pow-box"><legend>Локальная хэш-проверка</legend>
-            <p>Без внешних сервисов. Проверка использует процессор устройства и не доказывает, что вы человек.</p>
+          <fieldset class="pow-box"><legend>Turnstile-проверка</legend>
+            <p></p>
             <p id="cooldown" role="status"></p>
             <button id="pow-start" type="button" disabled>Вычислить проверку</button>
             <button id="pow-cancel" type="button" hidden>Отменить</button>
             <span id="pow-status" role="status" aria-live="polite">Загрузка условий публикации…</span>
           </fieldset>
-          <p>Все публикации проходят премодерацию, кроме сообщений доверенных участников и персонала.</p>
           <p id="post-result" role="status" aria-live="polite"></p>
         </form>
       </section>

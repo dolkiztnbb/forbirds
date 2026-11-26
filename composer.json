@@ -1,0 +1,17 @@
+{
+    "name": "forbirds/forum",
+    "description": "ForBirds PHP JSON API with premoderation",
+    "type": "project",
+    "require": {
+        "php": ">=8.3",
+        "ext-pdo": "*",
+        "ext-pdo_sqlite": "*",
+        "ext-fileinfo": "*",
+        "ext-mbstring": "*",
+        "ext-ctype": "*",
+        "ext-session": "*"
+    },
+    "scripts": {
+        "test": "python3 -m unittest discover -s tests -v"
+    }
+}

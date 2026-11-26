@@ -1,0 +1,73 @@
+/* Keep the blue bands, grey panels and table-based post layout of the original mockups. */
+[hidden] { display: none !important; }
+* { box-sizing: border-box; }
+body { font-size: 14px; color: #222; background: #fafafa; }
+a { color: #124b9c; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; padding: 5px 10px; }
+button:disabled { cursor: not-allowed; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid #064cca; outline-offset: 2px; }
+.sub { min-height: 40px; height: auto; color: #222; padding: 4px; }
+.sub form { display: flex; gap: 5px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.sub input { max-width: 180px; }
+.banner { text-align: center; padding: 28px 10px 18px; background: #e3e8ef; border-bottom: 1px solid #a5b2c3; }
+.banner > a { font-size: 42px; font-weight: bold; text-decoration: none; letter-spacing: -2px; }
+.banner p { color: #4c596b; margin: 8px 0; }
+.site-nav, .dashboard-nav { padding: 10px; line-height: 1.8; }
+.title { height: auto; min-height: 25px; padding: 4px 8px; }
+#search-form { padding: 3px 8px; }
+.news-table { border-collapse: collapse; }
+.news-table td { padding: 6px 10px; border: 1px solid #aaa; }
+.news-date { width: 160px; white-space: nowrap; }
+table.main-layout { height: auto; min-height: 50vh; }
+.sidebar { width: 200px; padding: 10px; }
+.sidebar a { color: #122e5b; font-weight: bold; }
+.sidebar-scroll { height: auto; max-height: none; }
+.sidebar details { margin-bottom: 15px; }
+.sidebar p { color: #252a30; white-space: pre-wrap; }
+.main-content { vertical-align: top; padding: 12px; }
+.author-info { width: auto; font-size: 11px; padding: 2px; text-align: center; color: #555; }
+td.post-author { width: 140px; }
+.author-name { overflow-wrap: anywhere; }
+.avatar { max-width: 64px; width: 64px; height: 64px; }
+.post-body { display: block; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.post-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.post-header time, .post-status { font-size: 12px; color: #555; }
+.post-status { border: 1px solid #aaa; padding: 2px 5px; background: #fff7d7; }
+.mod-tools { float: none; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.mod-tools button { font-size: 12px; }
+.post-links { margin-top: 12px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.file-box { height: auto; width: auto; max-width: 100%; overflow-wrap: anywhere; }
+.file-box.spoiler { background: #d0c7d8; }
+#notice { margin: 12px; padding: 12px; border: 1px solid #7a9fc7; background: #edf5ff; white-space: pre-wrap; }
+#notice.error { border-color: #b34545; background: #fff0f0; }
+#composer { max-width: 1000px; border-top: 1px solid #aaa; margin-top: 16px; }
+#post-form label, #section-form > label { display: block; margin: 8px 0; }
+#post-form input:not([type=checkbox]):not([type=file]), #post-form select, #section-form input, #section-form textarea { display: block; max-width: 100%; width: 100%; margin: 5px 0; padding: 6px; }
+.heading-tb { height: auto; }
+.post-tb { height: 180px; min-height: 100px; resize: vertical; padding: 8px; }
+.dnd { padding: 12px; height: auto; min-height: 100px; background: #efefef; }
+.dnd.drag-over { border: 2px solid #0754bf; background: #e6effc; }
+#file-input { display: block; max-width: 100%; }
+#file-list { list-style: none; margin: 10px 0; padding: 0; }
+#file-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 5px; border-bottom: 1px solid #ccc; }
+#file-list label { display: inline-flex; align-items: center; }
+.pow-box { border: 1px solid #8a99a9; background: #edf0f4; margin-top: 12px; }
+#pow-status { display: inline-block; margin: 8px; }
+#cooldown { font-weight: bold; }
+#post-submit { min-width: 180px; padding: 12px; margin-top: 8px; }
+.pagination { display: flex; gap: 12px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+#section-admin { margin-top: 24px; max-width: 600px; }
+footer { text-align: center; margin-top: 20px; }
+.empty { padding: 20px; color: #555; border: 1px dashed #aaa; }
+@media (max-width: 650px) {
+  .main-layout, .main-layout > tbody, .main-layout > tbody > tr, .main-layout > tbody > tr > td { display: block; width: 100%; }
+  .sidebar { padding: 8px; }
+  .sidebar details { display: inline-block; vertical-align: top; margin: 4px 12px 4px 0; }
+  td.post-author { width: 85px; }
+  .author-info { font-size: 10px; }
+  .news-date { width: 100px; }
+  .main-content { padding: 8px; }
+  .banner { padding: 20px 8px 10px; }
+}

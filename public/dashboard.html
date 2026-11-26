@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ForBirds — форум</title>
+  <link rel="stylesheet" href="/general.css">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body data-page="dashboard">
+  <header>
+    <div class="sub">
+      <form id="auth-form" action="/api/auth/login" method="post">
+        <label>Имя <input name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+"></label>
+        <label>Пароль <input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72"></label>
+        <button name="action" value="login">Войти</button>
+        <button name="action" value="register">Регистрация</button>
+      </form>
+      <div id="account" hidden><span id="account-name"></span> <button id="logout" type="button">Выйти</button></div>
+    </div>
+    <div class="banner"><a href="/">ForBirds</a><p>Лёгкий форум. Каждому слову — своё гнездо.</p></div>
+    <nav class="site-nav" aria-label="Навигация">
+      <a href="/">Главная</a> · <a href="/index.html?view=all">Все темы</a> ·
+      <a href="/dashboard.html">Создать тему</a> · <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
+      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
+    </nav>
+    <div class="title">Поиск</div>
+    <form id="search-form" action="/index.html" method="get">
+      <label>По форуму <input name="q" type="search" required minlength="2" maxlength="200"></label>
+      <button>Искать</button>
+    </form>
+    <div class="title">Обновления</div>
+    <table class="table news-table"><tbody id="news"><tr><td>Загрузка новостей…</td></tr></tbody></table>
+  </header>
+  <p id="notice" role="status" aria-live="polite" hidden></p>
+  <noscript><p>Для форм и локальной хэш-капчи необходим JavaScript. Вычисления выполняются только после нажатия кнопки проверки.</p></noscript>
+  <div class="title" id="page-title">Публикации и управление</div>
+  <table class="main-layout"><tbody><tr>
+    <td class="sidebar"><nav class="sidebar-scroll" id="sections" aria-label="Разделы">Загрузка разделов…</nav></td>
+    <td class="main-content">
+
+      <nav class="dashboard-nav"><a href="/dashboard.html">Новая тема</a> · <a href="?mode=mine">Мои сообщения</a> · <a id="queue-tab" href="?mode=queue" hidden>Очередь модерации</a></nav>
+      <div id="dashboard-content"></div>
+      <nav id="pagination" class="pagination" aria-label="Страницы"></nav>
+
+      <section id="composer" hidden>
+        <h2 id="composer-title">Создать тему</h2>
+        <form id="post-form" action="/api/threads" method="post" enctype="multipart/form-data">
+          <div id="topic-fields">
+            <label>Раздел <select name="section_id" id="section-select" required></select></label>
+            <label>Заголовок <input class="heading-tb" name="title" maxlength="200" required></label>
+          </div>
+          <label>Текст сообщения <textarea class="post-tb" name="body" required maxlength="50000"></textarea></label>
+          <fieldset id="publish-flags" hidden><legend>Размещение</legend>
+            <label><input name="is_news" type="checkbox">Добавить в новости</label>
+            <label><input name="is_featured" type="checkbox">Добавить на главную</label>
+          </fieldset>
+          <div class="dnd" id="drop-zone" tabindex="0" aria-label="Загрузка файлов">
+            <label>До 10 файлов, до 5 МиБ каждый, 20 МиБ суммарно.
+              <input id="file-input" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.pdf,.zip">
+            </label>
+            <span>Выберите, перетащите или вставьте файлы. Разрешены изображения, TXT, PDF, ZIP.</span>
+          </div>
+          <ul id="file-list"></ul>
+          <fieldset class="pow-box"><legend>Локальная хэш-проверка</legend>
+            <p>Без внешних сервисов. Проверка использует процессор устройства и не доказывает, что вы человек.</p>
+            <p id="cooldown" role="status"></p>
+            <button id="pow-start" type="button" disabled>Вычислить проверку</button>
+            <button id="pow-cancel" type="button" hidden>Отменить</button>
+            <span id="pow-status" role="status" aria-live="polite">Загрузка условий публикации…</span>
+          </fieldset>
+          <p>Все публикации проходят премодерацию, кроме сообщений доверенных участников и персонала.</p>
+          <button id="post-submit" type="submit" disabled>Запостить</button>
+          <p id="post-result" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section id="section-admin" hidden>
+        <h2>Создать раздел</h2>
+        <form id="section-form" action="/api/sections" method="post">
+          <label>Адрес <input name="slug" required maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="general"></label>
+          <label>Название <input name="title" required maxlength="200"></label>
+          <label>Описание <textarea name="description" maxlength="4000"></textarea></label>
+          <button>Добавить раздел</button>
+        </form>
+      </section>
+
+    </td>
+  </tr></tbody></table>
+  <footer><div class="title">Информация</div><p>— ForBirds Software 1.0 —</p></footer>
+</body>
+</html>

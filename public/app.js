@@ -220,7 +220,7 @@ async function loadFeed() {
   } else if (search) {
     query.set('q', search); title = 'Поиск: ' + search; description = 'Поиск по опубликованным темам и ответам.';
   } else if (params.get('view') === 'all') { title = 'Все темы'; description = 'Публикации из всех разделов.'; }
-  else if (staff()) description = 'Режим персонала: все темы, включая ожидающие проверки. Непроверенные ответы видны внутри тем.';
+  else if (staff()) description = '';
   else query.set('featured', '1');
   $('#page-title').textContent = title; $('#feed-description').textContent = description;
   const container = $('#feed');

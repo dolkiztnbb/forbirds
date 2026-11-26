@@ -240,5 +240,22 @@ export default {
   "Показывать IP и идентификаторы (только администратор)": "Show IPs and identifiers (administrator only)",
   "Список блокировок пуст.": "The ban list is empty.",
   "Снять блокировку": "Remove ban",
-  "Не поднимать тему (sage)": "Do not bump topic (sage)"
+  "Не поднимать тему (sage)": "Do not bump topic (sage)",
+  "Пост скрыт": "Post hidden",
+  "Пост заблокирован": "Post blocked",
+  "Некоторые поля профиля заблокированы модератором.": "Some profile fields have been locked by a moderator.",
+  "Удалить аватарку пользователя": "Delete user avatar",
+  "Запретить аватарку и похожие изображения": "Ban avatar and similar images",
+  "Разрешить смену аватарки": "Allow avatar changes",
+  "Запретить смену аватарки": "Lock avatar changes",
+  "Очистить описание пользователя": "Clear user description",
+  "Запретить текст описания": "Ban description text",
+  "Разрешить редактирование описания": "Allow description editing",
+  "Запретить редактирование описания": "Lock description editing",
+  "Вернуть видимость поста": "Unhide post",
+  "Скрыть пост от посетителей": "Hide post from visitors",
+  "Разблокировать пост": "Unblock post",
+  "Заблокировать пост": "Block post",
+  "Скрытые и заблокированные посты": "Hidden and blocked posts",
+  "Запреты описаний": "Description bans"
 };

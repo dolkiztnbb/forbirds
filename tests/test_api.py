@@ -202,7 +202,7 @@ class ApiTests(unittest.TestCase):
 
     def setUp(self):
         with sqlite3.connect(self.storage / 'forum.sqlite') as db:
-            for table in ['privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
+            for table in ['description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
                 db.execute(f'DELETE FROM {table}')
             db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL")
             db.execute("UPDATE users SET role = 'user', auto_approve = 0, is_banned = 0 WHERE role != 'admin'")
@@ -1281,6 +1281,146 @@ class ApiTests(unittest.TestCase):
         self.ok(self.admin.get('/api/session'))
 
 
+    def test_profile_moderation_permissions_locks_and_clearing(self):
+        uid = self.ids['normal']
+        self.ok(self.normal.upload('/api/me/profile', {'description': 'Original biography'},
+                                   [('pattern.png', (self.fixtures / 'pattern.png').read_bytes())], file_field='avatar'))
+        endpoint = f'/api/users/{uid}/profile/moderate'
+        self.ok(self.normal.post(endpoint, {'action': 'description_delete', 'reason': 'no access'}), 403)
+        self.ok(self.mod.request('POST', endpoint, data={'action': 'description_delete', 'reason': 'csrf'}, headers={'X-CSRF-Token': 'bad'}), 403)
+        self.ok(self.mod.post(endpoint, {'action': 'description_delete'}), 422)
+        for target in [self.ids['moderator'], self.ok(self.admin.get('/api/session'))['user']['id']]:
+            self.ok(self.mod.post(f'/api/users/{target}/profile/moderate', {'action': 'description_delete', 'reason': 'protected'}), 403)
+        profile = self.ok(self.normal.get(f'/api/users/{uid}'))
+        old_avatar = profile['avatar_url']
+        self.ok(self.mod.post(endpoint, {'action': 'avatar_lock', 'reason': 'avatar abuse'}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_lock', 'reason': 'bio abuse'}))
+        self.ok(self.normal.post('/api/me/profile', {'description': 'Changed'}), 403)
+        self.ok(self.normal.post('/api/me/profile', {'remove_avatar': True}), 403)
+        self.ok(self.normal.upload('/api/me/profile', {}, [('other.png', (self.fixtures / 'other.png').read_bytes())], file_field='avatar'), 403)
+        self.ok(self.normal.post('/api/me/profile', {'flag_file': ''}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['description'], 'Original biography')
+        self.ok(self.mod.post(endpoint, {'action': 'avatar_delete', 'reason': 'remove'}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_delete', 'reason': 'remove'}))
+        self.ok(self.guest.get(old_avatar), 404)
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['description'], '')
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['avatar_url'], '/avatars/noavatar.png')
+        for field in ['avatar', 'description']:
+            self.ok(self.mod.post(endpoint, {'action': field + '_unlock', 'reason': 'appeal'}))
+        self.ok(self.normal.post('/api/me/profile', {'description': 'Allowed again'}))
+        self.ok(self.normal.upload('/api/me/profile', {}, [('other.png', (self.fixtures / 'other.png').read_bytes())], file_field='avatar'))
+        actions = [entry['action'] for entry in self.ok(self.mod.get('/api/moderation/audit'))['items']]
+        self.assertIn('profile.avatar_delete', actions)
+        self.assertIn('profile.description_unlock', actions)
+
+    def test_avatar_hashban_blocks_uploads_and_existing_copies(self):
+        uid = self.ids['normal']
+        image = (self.fixtures / 'pattern.png').read_bytes()
+        profile = self.ok(self.normal.upload('/api/me/profile', {}, [('a.png', image)], file_field='avatar'))
+        avatar_bytes = self.ok(self.guest.get(profile['avatar_url']))
+        fields = {'section_id': self.section, 'title': 'Shared image', 'body': 'Synthetic only'}
+        topic = self.ok(self.admin.upload('/api/threads', fields, [('same.jpg', avatar_bytes)]), 201)
+        attachment = self.ok(self.mod.get(f'/api/posts/{topic["post_id"]}'))['attachments'][0]
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            name = db.execute('SELECT avatar_name FROM users WHERE id=?', [uid]).fetchone()[0]
+        db.close()
+        self.ok(self.mod.post(f'/api/users/{uid}/profile/moderate', {'action': 'avatar_hashban', 'reason': 'Synthetic fixture ban'}))
+        self.assertFalse((self.storage / 'avatars' / (name + '.jpg')).exists())
+        for path in [profile['avatar_url'], attachment['view_url'], attachment['download_url'], attachment['preview_url']]:
+            self.ok(self.guest.get(path), 404)
+        self.ok(self.normal.upload('/api/me/profile', {}, [('same.png', image)], file_field='avatar'), 422)
+        self.ok(self.normal.upload('/api/me/profile', {}, [('same.jpg', avatar_bytes)], file_field='avatar'), 422)
+        self.ok(self.normal.upload('/api/threads', fields, [('same.jpg', avatar_bytes)]), 422)
+        self.assertEqual(len(self.ok(self.mod.get('/api/moderation/media-bans'))['items']), 1)
+
+    def test_description_hashban_normalization_existing_copies_and_unban(self):
+        uid = self.ids['normal']
+        text = 'Запрещённое описание'
+        self.ok(self.normal.post('/api/me/profile', {'description': text}))
+        self.ok(self.trusted.post('/api/me/profile', {'description': text.upper()}))
+        endpoint = f'/api/users/{uid}/profile/moderate'
+        self.ok(self.mod.post(endpoint, {'action': 'description_hashban', 'reason': 'Text spam'}))
+        for target in [uid, self.ids['trusted']]:
+            self.assertEqual(self.ok(self.guest.get(f'/api/users/{target}'))['description'], '')
+        self.assertEqual(self.ok(self.trusted.get('/api/session'))['user']['description'], '')
+        for variant in [text, text.upper(), '  Запрещённое\n\tописание ', 'Запрещённое\u200bописание']:
+            response = self.normal.post('/api/me/profile', {'description': variant})
+            self.ok(response, 422)
+            self.assertEqual(response[1]['error']['code'], 'description_banned')
+        self.ok(self.normal.post('/api/me/profile', {'description': 'Completely different text'}))
+        ban = self.ok(self.mod.get('/api/moderation/description-bans'))['items'][0]
+        self.assertNotIn('text_hash', ban)
+        self.ok(self.normal.post(f'/api/moderation/description-bans/{ban["id"]}/remove', {'reason': 'no'}), 403)
+        self.ok(self.mod.post(f'/api/moderation/description-bans/{ban["id"]}/remove', {'reason': 'appeal'}))
+        self.ok(self.normal.post('/api/me/profile', {'description': text}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_delete', 'reason': 'clear'}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_hashban', 'reason': 'empty'}), 422)
+
+    def test_hidden_blocked_posts_revoke_all_public_surfaces(self):
+        self.trust(True)
+        fields = {'section_id': self.section, 'title': 'Restriction root', 'body': 'Root needle'}
+        topic = self.ok(self.trusted.upload('/api/threads', fields, [('a.txt', b'Safe text')]), 201)
+        reply = self.ok(self.normal.post(f'/api/threads/{topic["thread_id"]}/replies', {'body': 'uniquereplyneedle'}), 201)
+        self.moderate(reply['post_id'])
+        file = self.ok(self.guest.get(f'/api/posts/{topic["post_id"]}'))['attachments'][0]
+        root_route = f'/api/posts/{topic["post_id"]}/restrict'
+        self.ok(self.normal.post(root_route, {'action': 'hide', 'reason': 'no'}), 403)
+        self.ok(self.mod.post(root_route, {'action': 'hide'}), 422)
+        # An approved hidden reply must not affect counts, search, profile or bump.
+        self.ok(self.mod.post(f'/api/posts/{reply["post_id"]}/restrict', {'action': 'hide', 'reason': 'hide reply'}))
+        self.assertEqual(self.ok(self.guest.get('/api/threads?q=uniquereplyneedle'))['items'], [])
+        self.assertEqual(self.ok(self.guest.get('/api/threads'))['items'][0]['reply_count'], 0)
+        self.assertEqual(self.ok(self.normal.get('/api/me/posts'))['items'], [])
+        for action, reverse in [('hide', 'unhide'), ('block', 'unblock')]:
+            self.ok(self.mod.post(root_route, {'action': action, 'reason': 'Restrict root'}))
+            for client in [self.guest, self.normal, self.trusted]:
+                for path in [f'/api/threads/{topic["thread_id"]}', f'/api/posts/{topic["post_id"]}',
+                             f'/api/posts/{reply["post_id"]}', file['download_url']]:
+                    self.ok(client.get(path), 404)
+                self.assertEqual(self.ok(client.get('/api/threads'))['items'], [])
+                self.assertEqual(self.ok(client.get(f'/api/users/{self.ids["trusted"]}/posts'))['items'], [])
+                sections = self.ok(client.get('/api/sections'))
+                self.assertEqual(sections[0]['recent_posts'], [])
+            self.ok(self.mod.get(f'/api/posts/{topic["post_id"]}'))
+            self.ok(self.guest.request('HEAD', file['download_url']), 404)
+            self.ok(self.guest.request('GET', file['download_url'], headers={'Range': 'bytes=0-2'}), 404)
+            if action == 'block':
+                self.ok(self.mod.post(f'/api/posts/{topic["post_id"]}/moderate', {'action': 'approve'}), 409)
+            self.ok(self.mod.post(root_route, {'action': reverse, 'reason': 'appeal'}))
+        self.ok(self.guest.get(f'/api/threads/{topic["thread_id"]}'))
+        self.ok(self.mod.post(f'/api/posts/{reply["post_id"]}/restrict', {'action': 'unhide', 'reason': 'appeal'}))
+        self.assertEqual(self.ok(self.guest.get('/api/threads'))['items'][0]['reply_count'], 1)
+        self.assertEqual(len(self.ok(self.mod.get('/api/moderation/restricted'))['items']), 0)
+        # Block also holds a pending post against approval and author visibility.
+        pending = self.topic(self.normal)
+        self.ok(self.mod.post(f'/api/posts/{pending["post_id"]}/restrict', {'action': 'block', 'reason': 'hold'}))
+        self.ok(self.normal.get(f'/api/posts/{pending["post_id"]}'), 404)
+        self.ok(self.mod.post(f'/api/posts/{pending["post_id"]}/moderate', {'action': 'approve'}), 409)
+
+    def test_migration_006_updates_legacy_flag_references(self):
+        path = self.storage / 'legacy-flag-names.sqlite'
+        mapping = {"'apeson.png": 'apeson.png', 'Cyber Israel.png': 'Cyber-Israel.png',
+                   'Gem Pass.png': 'Gem-Pass.png', 'Great Britain.png': 'Great-Britain.png',
+                   'I was raped.png': 'I-was-raped.png'}
+        with sqlite3.connect(path) as db:
+            for migration in sorted((ROOT / 'database/migrations').glob('*.sql')):
+                if migration.name.startswith('006_'):
+                    for i, name in enumerate(mapping):
+                        db.execute('INSERT INTO users(username,password_hash,flag_file) VALUES (?,?,?)', [f'flag_{i}', 'not-used', name])
+                db.executescript(migration.read_text())
+            self.assertEqual([row[0] for row in db.execute('SELECT flag_file FROM users ORDER BY id')], list(mapping.values()))
+        db.close()
+
+    def test_renamed_flags_are_discovered_and_keep_bytes(self):
+        flags = {item['file']: item for item in self.ok(self.guest.get('/api/flags'))}
+        for name, label in [('apeson.png', "'apeson"), ('Cyber-Israel.png', 'Cyber Israel'), ('Gem-Pass.png', 'Gem Pass'),
+                            ('Great-Britain.png', 'Great Britain'), ('I-was-raped.png', 'I was raped')]:
+            self.assertIn(name, flags)
+            self.assertEqual(flags[name]['label'], label)
+            self.assertEqual(self.ok(self.guest.get(flags[name]['url'])), (ROOT / 'public' / 'flags' / name).read_bytes())
+        self.ok(self.normal.post('/api/me/profile', {'flag_file': 'Great-Britain.png'}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["normal"]}'))['flag']['file'], 'Great-Britain.png')
+
     def test_static_layouts_assets_and_private_path_allowlist(self):
         for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/moderation.js', '/fingerprint.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
@@ -1300,10 +1440,11 @@ class ApiTests(unittest.TestCase):
         pending = self.topic(self.normal)
         section = self.ok(self.admin.post('/api/sections', {'slug': 'other', 'title': 'Other section'}), 201)['id']
         file = self.ok(self.mod.get(f'/api/posts/{a["post_id"]}'))['attachments'][0]
+        self.ok(self.normal.upload('/api/me/profile', {'description': 'Browser profile spam'}, [('other.png', (self.fixtures / 'other.png').read_bytes())], file_field='avatar'))
         result = subprocess.run(['node', 'tests/test_moderation_browser.cjs'], cwd=ROOT,
                                 env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
                                      'FORBIRDS_MODERATION_FIXTURE': json.dumps({'a': a, 'b': b, 'reply': reply,
-                                          'pending': pending, 'deleted': deleted, 'file_id': file['id'], 'section_id': section})},
+                                          'pending': pending, 'deleted': deleted, 'file_id': file['id'], 'section_id': section, 'profile_id': self.ids['normal']})},
                                 text=True, capture_output=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

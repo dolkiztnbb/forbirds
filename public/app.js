@@ -143,6 +143,7 @@ async function profile(id) {
   if ('auto_approve' in user) dialog.append(node('p', t("Автоподтверждение: ") + (user.auto_approve ? t("выдано") : t("не выдано"))));
   const canManage = staff() && user.id !== me.id && user.role !== 'admin' && (admin() || user.role === 'user');
   if (canManage) {
+    dialog.append(moderation.profileTools(user, true, async () => { dialog.close(); await loadView(); await profile(id); }));
     for (const [action, enabled, text] of [
       ['trust', !user.auto_approve, user.auto_approve ? t("Отозвать автоподтверждение") : t("Выдать автоподтверждение")],
       ['ban', !user.is_banned, user.is_banned ? t("Снять бан") : t("Забанить")],
@@ -203,6 +204,7 @@ function flagBadge(flag) {
 function renderPost(item, { title = '', threadLink = true, replyCount, pendingReplyCount = 0 } = {}) {
   const table = node('table', null, 'post-table ' + (item.is_root ? 'p' : 'pl'));
   table.dataset.status = item.status;
+  table.dataset.restricted = item.is_hidden || item.is_blocked ? '1' : '0';
   const tbody = node('tbody'), row = node('tr'), author = node('td', null, 'post-author'), content = node('td', null, 'post-content');
   const name = node('div', null, 'author-name');
   const username = item.username || t("Аноним");
@@ -223,6 +225,9 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   number.className = 'post-number'; header.append(number);
   const time = node('time', date(item.created_at)); time.dateTime = item.created_at; header.append(time);
   if (item.status !== 'approved' || staff()) header.append(node('span', labels[item.status], 'post-status'));
+  if (item.is_hidden) header.append(node('span', t('Пост скрыт'), 'post-status'));
+  if (item.is_blocked) header.append(node('span', t('Пост заблокирован'), 'post-status'));
+  if (staff()) header.append(moderation.postControls(item));
   content.append(header, node('hr'), node('div', item.body, 'post-body'));
   if (item.attachments?.length) {
     const files = node('div', null, 'attachments');
@@ -287,7 +292,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
           await loadView(); await loadNews(); await loadSections();
         } finally { if (b.isConnected) b.disabled = false; }
       });
-      b.disabled = (action === 'approve' && item.status === 'approved') || (action === 'unapprove' && item.status === 'pending');
+      b.disabled = (action === 'approve' && (item.status === 'approved' || item.is_blocked)) || (action === 'unapprove' && item.status === 'pending');
       tools.append(b);
     }
     tools.append(moderation.moveButton(item));
@@ -357,14 +362,14 @@ async function loadDashboard() {
     if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
   }
-  if (mode === 'media-bans' || mode === 'identity-bans') {
+  if (mode === 'media-bans' || mode === 'identity-bans' || mode === 'description-bans') {
     paginate(await moderation.bans(container, mode)); return;
   }
-  if (mode === 'queue' || mode === 'audit' || mode === 'archive') {
+  if (mode === 'queue' || mode === 'audit' || mode === 'archive' || mode === 'restricted') {
     if (!staff()) { empty(container, t("Для этой страницы нужны права модератора.")); return; }
     container.append(link(mode === 'queue' ? t("Журнал модерации →") : t("← Очередь"), '?mode=' + (mode === 'queue' ? 'audit' : 'queue')));
     const data = await api('/moderation/' + mode + '?' + pageQuery());
-    if (!data.items.length) container.append(node('p', mode === 'queue' ? t("Очередь пуста.") : mode === 'archive' ? t("Сообщений пока нет.") : t("Журнал пуст.")));
+    if (!data.items.length) container.append(node('p', mode === 'queue' ? t("Очередь пуста.") : mode !== 'audit' ? t("Сообщений пока нет.") : t("Журнал пуст.")));
     if (mode === 'audit') {
       for (const entry of data.items) container.append(node('p', `${date(entry.created_at)} · #${entry.actor_id}: ${entry.action} · ${entry.target_type} №${entry.target_id} · ${entry.details}`));
     } else {
@@ -398,10 +403,17 @@ async function loadProfile() {
   $('#profile-meta').textContent = t('{role} · С нами с {date}', { role: roleLabels[user.role], date: date(user.created_at) }) + (user.is_banned ? t(' · Заблокирован') : '');
   const actions = $('#profile-actions'); actions.replaceChildren();
   if (staff()) actions.append(button(t("Права / бан пользователя"), () => profile(user.id)));
+  actions.append(moderation.profileTools(user, staff() && user.id !== me.id && user.role !== 'admin' && (admin() || user.role === 'user')));
   const own = me?.id === user.id;
   $('#profile-editor').hidden = !own || !!me?.is_banned;
   if (own) {
     $('#profile-bio').value = user.description;
+    $('#profile-bio').disabled = !!user.description_locked;
+    profileForm.elements.avatar.disabled = !!user.avatar_locked;
+    profileForm.elements.remove_avatar.disabled = !!user.avatar_locked;
+    let locks = $('#profile-locks');
+    if (!locks) { locks = node('p'); locks.id = 'profile-locks'; profileForm.prepend(locks); }
+    locks.textContent = user.avatar_locked || user.description_locked ? t('Некоторые поля профиля заблокированы модератором.') : '';
     const flags = await api('/flags');
     const select = $('#profile-flag-select');
     select.replaceChildren();
@@ -439,6 +451,9 @@ async function loadProfile() {
       if (item.status !== 'approved' || staff()) content.append(node('span', ' — ' + labels[item.status], 'post-status'));
       content.append(node('div', item.excerpt, 'profile-excerpt'));
       if (admin()) content.append(moderation.identityBadge(item.id));
+      if (item.is_hidden) content.append(node('span', t('Пост скрыт'), 'post-status'));
+      if (item.is_blocked) content.append(node('span', t('Пост заблокирован'), 'post-status'));
+      row.dataset.restricted = item.is_hidden || item.is_blocked ? '1' : '0';
       row.dataset.status = item.status; row.append(when, content); rows.append(row);
     }
     table.append(caption, head, rows); container.append(table);
@@ -457,7 +472,7 @@ if (profileForm) {
     try {
       const data = new FormData(profileForm), file = profileForm.elements.avatar.files[0];
       if (!file) data.delete('avatar');
-      data.set('remove_avatar', profileForm.elements.remove_avatar.checked ? '1' : '0');
+      if (!profileForm.elements.remove_avatar.disabled) data.set('remove_avatar', profileForm.elements.remove_avatar.checked ? '1' : '0');
       if (file && file.size > 2 * 1024 * 1024) throw new Error(t("Аватарка должна быть не больше 2 МиБ."));
       me = await post('/me/profile', data);
       profileForm.reset(); identityUI(); await loadProfile();

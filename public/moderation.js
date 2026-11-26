@@ -60,9 +60,47 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
       notify(t('Сообщение перемещено.'), false); await refresh();
     });
   }
+  function profileTools(user, canManage, after = refresh) {
+    const tools = node('div', null, 'profile-moderation mod-tools');
+    if (!canManage) return tools;
+    const actions = [
+      ['avatar_delete', t('Удалить аватарку пользователя')],
+      ['avatar_hashban', t('Запретить аватарку и похожие изображения')],
+      [user.avatar_locked ? 'avatar_unlock' : 'avatar_lock', user.avatar_locked ? t('Разрешить смену аватарки') : t('Запретить смену аватарки')],
+      ['description_delete', t('Очистить описание пользователя')],
+      ['description_hashban', t('Запретить текст описания')],
+      [user.description_locked ? 'description_unlock' : 'description_lock', user.description_locked ? t('Разрешить редактирование описания') : t('Запретить редактирование описания')],
+    ];
+    for (const [action, label] of actions) {
+      const control = button(label, async () => {
+        const why = reason(); if (!why) return;
+        if (!confirm(label + ': ' + user.username + '?')) return;
+        await post(`/users/${user.id}/profile/moderate`, { action, reason: why });
+        await after();
+      });
+      if ((action === 'avatar_delete' || action === 'avatar_hashban') && user.avatar_url === '/avatars/noavatar.png') control.disabled = true;
+      if ((action === 'description_delete' || action === 'description_hashban') && !user.description) control.disabled = true;
+      tools.append(control);
+    }
+    return tools;
+  }
+  function postControls(item) {
+    const tools = node('div', null, 'post-restrictions mod-tools');
+    if (!staff()) return tools;
+    for (const [action, label] of [
+      [item.is_hidden ? 'unhide' : 'hide', item.is_hidden ? t('Вернуть видимость поста') : t('Скрыть пост от посетителей')],
+      [item.is_blocked ? 'unblock' : 'block', item.is_blocked ? t('Разблокировать пост') : t('Заблокировать пост')],
+    ]) tools.append(button(label, async () => {
+      const why = reason(); if (!why) return;
+      if (!confirm(label + ' #' + item.id + '?')) return;
+      await post(`/posts/${item.id}/restrict`, { action, reason: why });
+      await refresh();
+    }));
+    return tools;
+  }
   function navigation(container) {
     if (!staff()) return;
-    for (const [mode, text] of [['archive', t('Удалённые и отклонённые')], ['media-bans', t('Запреты файлов')]]) {
+    for (const [mode, text] of [['archive', t('Удалённые и отклонённые')], ['restricted', t('Скрытые и заблокированные посты')], ['media-bans', t('Запреты файлов')], ['description-bans', t('Запреты описаний')]]) {
       container.append(link(text, '/dashboard.html?mode=' + mode), ' · ');
     }
     if (admin()) {
@@ -95,5 +133,5 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     }
     return data;
   }
-  return { fileTools, moveButton, identityBadge, setIdentity, navigation, bans };
+  return { fileTools, moveButton, identityBadge, setIdentity, navigation, bans, profileTools, postControls };
 }

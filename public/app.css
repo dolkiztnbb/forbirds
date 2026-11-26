@@ -186,3 +186,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .post-identity:empty, .file-tools:empty { display: none; }
 .post-identity button, .file-tools button { font-size: 10px; max-width: 100%; }
 .file-tools { border-bottom: 1px dashed #888; padding-bottom: 4px; }
+.post-table[data-restricted="1"] { opacity: .65; }
+.post-table[data-restricted="1"] td { background-color: #fff3a8; }
+#profile-locks { color: #7a4b00; font-size: 12px; }
+
+.profile-posts-table tr[data-restricted="1"] { background: #fff3a8; opacity: .65; }

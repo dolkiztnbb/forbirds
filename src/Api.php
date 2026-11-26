@@ -74,7 +74,7 @@ final class Api
             }
             if ($path === '/api/me/posts') {
                 $user = $this->requireUser();
-                return $this->page('SELECT p.* FROM posts p WHERE p.user_id = ? ORDER BY p.id DESC', [$user['id']]);
+                return $this->page('SELECT p.* FROM posts p JOIN posts root ON root.thread_id=p.thread_id AND root.is_root=1 WHERE p.user_id = ? AND ' . $this->unrestrictedSql('p') . ' AND ' . $this->unrestrictedSql('root') . ' ORDER BY p.id DESC', [$user['id']]);
             }
             if ($path === '/api/moderation/queue') {
                 $this->requireStaff();
@@ -274,7 +274,7 @@ final class Api
     {
         $actor = $this->requireUser();
         $description = array_key_exists('description', $this->input)
-            ? $this->text('description', 0, 4000) : $actor['description'];
+            ? $this->text('description', 0, 4000) : null;
         $flag = null;
         $changeFlag = array_key_exists('flag_file', $this->input);
         if ($changeFlag) {
@@ -290,6 +290,9 @@ final class Api
         }
         $file = $_FILES['avatar'] ?? null;
         $name = null;
+        if ($actor['avatar_locked'] && ($remove || ($file && ($file['error'] ?? null) !== UPLOAD_ERR_NO_FILE))) {
+            throw new ApiError(403, 'profile_locked', 'Изменение этого поля профиля заблокировано модератором.');
+        }
         $previews = new ImagePreview($this->config['storage'], 'avatars');
         if ($file && ($file['error'] ?? null) !== UPLOAD_ERR_NO_FILE) {
             $this->rateLimit('avatar', 10, 60);
@@ -318,10 +321,20 @@ final class Api
                 // Read the latest avatar inside the transaction, not the potentially stale session snapshot.
                 if ($name) (new MediaBans($this->db))->check(MediaBans::hashes((new ImagePreview($this->config['storage'], 'avatars'))->path($name), 'image/jpeg'));
                 $current = $this->one('SELECT * FROM users WHERE id = ?', [$actor['id']]);
+                if (($name || $remove) && $current['avatar_locked']) {
+                    throw new ApiError(403, 'profile_locked', 'Изменение этого поля профиля заблокировано модератором.');
+                }
+                $nextDescription = $description ?? $current['description'];
+                if ($current['description_locked'] && $nextDescription !== $current['description']) {
+                    throw new ApiError(403, 'profile_locked', 'Изменение этого поля профиля заблокировано модератором.');
+                }
+                if ($description !== null && TextBans::matches($this->db, $description)) {
+                    throw new ApiError(422, 'description_banned', 'Такое описание профиля запрещено.');
+                }
                 $old = $current['avatar_name'];
                 $avatar = $name ?? ($remove ? null : $old);
                 $this->run('UPDATE users SET description = ?, avatar_name = ?, flag_file = ? WHERE id = ?',
-                    [$description, $avatar, $changeFlag ? $flag : $current['flag_file'], $actor['id']]);
+                    [$nextDescription, $avatar, $changeFlag ? $flag : $current['flag_file'], $actor['id']]);
                 return $this->one('SELECT * FROM users WHERE id = ?', [$actor['id']]);
             });
         } catch (Throwable $e) {
@@ -351,10 +364,10 @@ final class Api
             $viewer = (int) $this->user['id'];
             $visible = static fn (string $alias): string => "($alias.status = 'approved' OR ($alias.status = 'pending' AND $alias.user_id = $viewer))";
         }
-        $postVisible = $visible('p');
-        $rootVisible = $visible('root');
-        $replyVisible = $visible('r');
-        $data = $this->page("SELECT p.id, p.thread_id, p.is_root, p.status, p.created_at,
+        $postVisible = '(' . $visible('p') . ') AND ' . $this->unrestrictedSql('p');
+        $rootVisible = '(' . $visible('root') . ') AND ' . $this->unrestrictedSql('root');
+        $replyVisible = '(' . $visible('r') . ') AND ' . $this->unrestrictedSql('r');
+        $data = $this->page("SELECT p.id, p.thread_id, p.is_root, p.status, p.is_hidden, p.is_blocked, p.created_at,
             substr(p.body, 1, 180) AS excerpt, t.title, t.section_id,
             (SELECT count(*) FROM posts r WHERE r.thread_id = p.thread_id AND r.is_root = 0
                 AND r.id < p.id AND ($replyVisible)) AS preceding_replies
@@ -381,6 +394,8 @@ final class Api
             $viewer = (int) $this->user['id'];
             $replyVisibility = "(r.status = 'approved' OR (r.status = 'pending' AND r.user_id = $viewer))";
         }
+        $replyVisibility = '(' . $replyVisibility . ') AND ' . $this->unrestrictedSql('r');
+        $recentVisibility = $this->unrestrictedSql('p') . ' AND ' . $this->unrestrictedSql('root');
         $recent = $this->all("WITH recent AS (
             SELECT p.id, p.thread_id, p.is_root, p.status, p.created_at, substr(p.body,1,100) AS excerpt,
                 t.section_id, t.title, u.username,
@@ -388,7 +403,7 @@ final class Api
             FROM posts p JOIN threads t ON t.id = p.thread_id
             JOIN posts root ON root.thread_id = t.id AND root.is_root = 1
             LEFT JOIN users u ON u.id = p.user_id
-            WHERE p.status IN $statuses AND root.status IN $statuses
+            WHERE p.status IN $statuses AND root.status IN $statuses AND $recentVisibility
         ) SELECT recent.*, (SELECT count(*) FROM posts r
             WHERE r.thread_id = recent.thread_id AND r.is_root = 0 AND r.id < recent.id
                 AND ($replyVisibility)) AS preceding_replies
@@ -431,7 +446,9 @@ final class Api
     {
         // Visibility is derived from current server-side permissions, never from a client flag.
         $statuses = $this->isStaff() ? "('approved','pending')" : "('approved')";
-        $where = ["p.status IN $statuses"];
+        $where = ["p.status IN $statuses", $this->unrestrictedSql('p')];
+        $searchVisible = $this->unrestrictedSql('search_post');
+        $replyVisible = $this->unrestrictedSql('r');
         $params = [];
         if (isset($_GET['section_id'])) {
             $where[] = 't.section_id = ?';
@@ -451,15 +468,15 @@ final class Api
             }
             $where[] = "(instr(unicode_lower(t.title), unicode_lower(?)) > 0 OR EXISTS (
                 SELECT 1 FROM posts search_post WHERE search_post.thread_id = t.id
-                AND search_post.status IN $statuses AND instr(unicode_lower(search_post.body), unicode_lower(?)) > 0))";
+                AND search_post.status IN $statuses AND $searchVisible AND instr(unicode_lower(search_post.body), unicode_lower(?)) > 0))";
             array_push($params, $_GET['q'], $_GET['q']);
         }
         $pendingCount = $this->isStaff()
             ? "(SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status = 'pending')" : '0';
-        $bumpOrder = "(SELECT coalesce(max(bp.bump_order),0) FROM posts bp WHERE bp.thread_id=t.id AND bp.status='approved') DESC, t.id DESC";
+        $bumpOrder = "(SELECT coalesce(max(bp.bump_order),0) FROM posts bp WHERE bp.thread_id=t.id AND bp.status='approved' AND bp.is_hidden=0 AND bp.is_blocked=0) DESC, t.id DESC";
         $order = ($this->isStaff() ? "(p.status = 'pending') DESC, (pending_reply_count > 0) DESC, " : '') . $bumpOrder;
         return $this->page("SELECT t.*, p.id AS post_id, p.body, p.user_id, p.status, u.username,
-            (SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status IN $statuses) AS reply_count,
+            (SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status IN $statuses AND $replyVisible) AS reply_count,
             $pendingCount AS pending_reply_count
             FROM threads t JOIN posts p ON p.thread_id = t.id AND p.is_root = 1
             LEFT JOIN users u ON u.id = p.user_id WHERE " . implode(' AND ', $where) . ' ORDER BY ' . $order, $params);
@@ -481,6 +498,7 @@ final class Api
             $condition = "(p.status = 'approved' OR (p.status = 'pending' AND p.user_id = ?))";
             $params[] = $this->user['id'];
         }
+        $condition = "($condition) AND " . $this->unrestrictedSql('p');
         $replies = $this->page("SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned, u.avatar_name AS author_avatar_name, u.flag_file AS author_flag_file
             FROM posts p LEFT JOIN users u ON u.id = p.user_id
             WHERE p.thread_id = ? AND p.is_root = 0 AND $condition ORDER BY p.id", $params);
@@ -592,6 +610,7 @@ final class Api
                 throw new ApiError(409, 'post_deleted', 'Удалённое сообщение нельзя восстановить через API.');
             }
             $status = $statuses[$action];
+            if ($status === 'approved' && $post['is_blocked']) throw new ApiError(409, 'post_blocked', 'Сначала разблокируйте сообщение.');
             if ($status === 'approved' && $post['status'] !== 'approved' && !$post['sage']) {
                 $this->run('UPDATE posts SET bump_order = (SELECT coalesce(max(bump_order),0)+1 FROM posts) WHERE id = ?', [$id]);
             }
@@ -680,10 +699,15 @@ final class Api
         return $post;
     }
 
+    private function unrestrictedSql(string $alias): string
+    {
+        return $this->isStaff() ? '1=1' : "($alias.is_hidden=0 AND $alias.is_blocked=0)";
+    }
+
     private function canSee(array $post): bool
     {
-        return $post['status'] === 'approved' || ($post['status'] === 'pending' && $this->user
-            && (int) $post['user_id'] === (int) $this->user['id']);
+        return !$post['is_hidden'] && !$post['is_blocked'] && ($post['status'] === 'approved' || ($post['status'] === 'pending' && $this->user
+            && (int) $post['user_id'] === (int) $this->user['id']));
     }
 
     private function postWithAttachments(array $post): array
@@ -822,11 +846,14 @@ final class Api
         if (!$user) {
             return null;
         }
+        if (TextBans::matches($this->db, $user['description'])) $user['description'] = '';
         $user['avatar_url'] = $this->avatarUrl($user['id'], $user['avatar_name'] ?? null);
         $user['flag'] = $this->flags->find($user['flag_file'] ?? null);
         $keys = ['id', 'username', 'role', 'is_banned', 'created_at', 'description', 'avatar_url', 'flag'];
         if ($private) {
             $keys[] = 'auto_approve';
+            $keys[] = 'avatar_locked';
+            $keys[] = 'description_locked';
         }
         return array_intersect_key($user, array_flip($keys));
     }

@@ -7,6 +7,12 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Некорректное действие с профилем.' => 'Invalid profile action.',
+        'Нельзя запретить пустое описание.' => 'An empty description cannot be banned.',
+        'Некорректное ограничение поста.' => 'Invalid post restriction.',
+        'Изменение этого поля профиля заблокировано модератором.' => 'A moderator has locked changes to this profile field.',
+        'Такое описание профиля запрещено.' => 'This profile description is banned.',
+        'Сначала разблокируйте сообщение.' => 'Unblock the post first.',
         'Публикация с этого подключения или браузера ограничена.' => 'Posting from this connection or browser is restricted.',
         'Файл заблокирован: совпадение с запрещённым материалом.' => 'File blocked: matches banned material.',
         'Сначала включите показ IP в панели управления.' => 'Enable IP display in the dashboard first.',

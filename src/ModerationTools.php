@@ -126,8 +126,80 @@ trait ModerationTools
         return ['id' => $id, 'post_id' => $file['post_id']];
     }
 
+    private function moderateProfile(int $id): array
+    {
+        $actor = $this->requireStaff();
+        $action = $this->text('action', 1, 32);
+        $actions = ['avatar_delete', 'avatar_hashban', 'avatar_lock', 'avatar_unlock',
+            'description_delete', 'description_hashban', 'description_lock', 'description_unlock'];
+        if (!in_array($action, $actions, true)) $this->invalid('Некорректное действие с профилем.');
+        $reason = $this->text('reason', 1, 1000);
+        $old = $this->transaction(function () use ($id, $actor, $action, $reason) {
+            $target = $this->one('SELECT * FROM users WHERE id = ?', [$id]);
+            if (!$target) $this->notFound();
+            if ($target['role'] === 'admin' || (int) $actor['id'] === $id || ($actor['role'] !== 'admin' && $target['role'] !== 'user')) {
+                throw new ApiError(403, 'forbidden', 'Нельзя изменять этого пользователя.');
+            }
+            if ($action === 'avatar_hashban') {
+                if (!$target['avatar_name']) $this->notFound();
+                $path = (new ImagePreview($this->config['storage'], 'avatars'))->path($target['avatar_name']);
+                if (!is_file($path)) $this->notFound();
+                $hashes = MediaBans::hashes($path, 'image/jpeg');
+                $this->run('INSERT INTO media_bans(sha256,dhash,ahash,reason,actor_id) VALUES (?,?,?,?,?) ON CONFLICT(sha256) DO NOTHING',
+                    [$hashes['sha256'], $hashes['dhash'], $hashes['ahash'], $reason, $actor['id']]);
+            }
+            if ($action === 'description_hashban') {
+                $hash = TextBans::hash($target['description']);
+                if ($hash === TextBans::hash('')) $this->invalid('Нельзя запретить пустое описание.');
+                $this->run('INSERT INTO description_bans(text_hash,actor_id,reason) VALUES (?,?,?) ON CONFLICT(text_hash) DO NOTHING',
+                    [$hash, $actor['id'], $reason]);
+            }
+            if (in_array($action, ['avatar_delete', 'avatar_hashban'], true)) {
+                $this->run('UPDATE users SET avatar_name=NULL WHERE id=?', [$id]);
+            } elseif (in_array($action, ['description_delete', 'description_hashban'], true)) {
+                $this->run("UPDATE users SET description='' WHERE id=?", [$id]);
+            } else {
+                $column = str_starts_with($action, 'avatar_') ? 'avatar_locked' : 'description_locked';
+                $this->run("UPDATE users SET $column=? WHERE id=?", [(int) str_ends_with($action, '_lock'), $id]);
+            }
+            $this->audit($actor['id'], 'profile.' . $action, 'user', $id, ['reason' => $reason]);
+            return $target['avatar_name'];
+        });
+        if ($old && in_array($action, ['avatar_delete', 'avatar_hashban'], true)) {
+            $path = (new ImagePreview($this->config['storage'], 'avatars'))->path($old);
+            if (is_file($path) && !@unlink($path)) error_log('Cannot purge moderated avatar for user #' . $id);
+        }
+        return $this->publicUser($this->one('SELECT * FROM users WHERE id=?', [$id]), true);
+    }
+
+    private function restrictPost(int $id): array
+    {
+        $actor = $this->requireStaff();
+        $action = $this->text('action', 1, 20);
+        if (!in_array($action, ['hide', 'unhide', 'block', 'unblock'], true)) $this->invalid('Некорректное ограничение поста.');
+        $reason = $this->text('reason', 1, 1000);
+        return $this->transaction(function () use ($id, $actor, $action, $reason) {
+            $post = $this->one('SELECT * FROM posts WHERE id=?', [$id]);
+            if (!$post) $this->notFound();
+            $column = in_array($action, ['hide', 'unhide'], true) ? 'is_hidden' : 'is_blocked';
+            $enabled = (int) in_array($action, ['hide', 'block'], true);
+            $this->run("UPDATE posts SET $column=? WHERE id=?", [$enabled, $id]);
+            $this->audit($actor['id'], 'post.' . $action, 'post', $id, ['reason' => $reason, 'from' => $post[$column], 'to' => $enabled]);
+            return ['post_id' => $id, 'is_hidden' => $column === 'is_hidden' ? $enabled : $post['is_hidden'],
+                'is_blocked' => $column === 'is_blocked' ? $enabled : $post['is_blocked']];
+        });
+    }
+
     private function moderationGet(string $path): ?array
     {
+        if ($path === '/api/moderation/description-bans') {
+            $this->requireStaff();
+            return $this->page('SELECT id,reason,actor_id,created_at FROM description_bans ORDER BY id DESC', []);
+        }
+        if ($path === '/api/moderation/restricted') {
+            $this->requireStaff();
+            return $this->page('SELECT p.*,t.title FROM posts p JOIN threads t ON t.id=p.thread_id WHERE p.is_hidden=1 OR p.is_blocked=1 ORDER BY p.id DESC', []);
+        }
         if ($path === '/api/moderation/archive') {
             $this->requireStaff();
             return $this->page("SELECT p.*,t.title FROM posts p JOIN threads t ON t.id=p.thread_id WHERE p.status IN ('deleted','rejected') ORDER BY p.id DESC", []);
@@ -155,13 +227,15 @@ trait ModerationTools
             return ['enabled' => $enabled];
         }
         if ($path === '/api/moderation/identity-bans') return $this->identityBan();
+        if (preg_match('~^/api/users/([1-9][0-9]*)/profile/moderate$~D', $path, $m)) return $this->moderateProfile((int) $m[1]);
+        if (preg_match('~^/api/posts/([1-9][0-9]*)/restrict$~D', $path, $m)) return $this->restrictPost((int) $m[1]);
         if (preg_match('~^/api/posts/([1-9][0-9]*)/move$~D', $path, $m)) return $this->movePost((int) $m[1]);
         if (preg_match('~^/api/attachments/([1-9][0-9]*)/moderate$~D', $path, $m)) return $this->moderateAttachment((int) $m[1]);
-        if (preg_match('~^/api/moderation/(media-bans|identity-bans)/([1-9][0-9]*)/remove$~D', $path, $m)) {
+        if (preg_match('~^/api/moderation/(media-bans|identity-bans|description-bans)/([1-9][0-9]*)/remove$~D', $path, $m)) {
             $actor = $m[1] === 'identity-bans' ? $this->requireAdmin() : $this->requireStaff();
             if ($m[1] === 'identity-bans' && !$this->privacyEnabled()) throw new ApiError(403, 'privacy_disabled', 'Сначала включите показ IP в панели управления.');
             $reason = $this->text('reason', 1, 1000);
-            $table = $m[1] === 'media-bans' ? 'media_bans' : 'identity_bans';
+            $table = ['media-bans' => 'media_bans', 'identity-bans' => 'identity_bans', 'description-bans' => 'description_bans'][$m[1]];
             return $this->transaction(function () use ($table, $m, $actor, $reason) {
                 if (!$this->one("SELECT id FROM $table WHERE id = ?", [(int) $m[2]])) $this->notFound();
                 $this->run("DELETE FROM $table WHERE id = ?", [(int) $m[2]]);

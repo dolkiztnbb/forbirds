@@ -65,8 +65,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .pagination > * { margin-right: 10px; }
 .pagination:empty { display: none; }
 #section-admin { border-top: 1px solid #888; margin-top: 10px; }
-  
-#section-admin input:not([type=checkbox]), #section-admin textarea { max-width: 100%; box-sizing: border-box; }
+.section-editor { margin-bottom: 15px; }
+.section-editor label { display: block; margin: 0 0 5px; }
+.section-editor input:not([type=checkbox]), .section-editor textarea, .section-editor select { display: block; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; margin: 0 0 10px; font: inherit; font-size: 13px; }
+.section-editor input:not([type=checkbox]), .section-editor select { height: auto; min-height: 28px; padding: 3px; }
+.section-editor textarea { padding: 5px; resize: vertical; }
+.section-editor small { display: block; margin: -5px 0 10px; font-size: 11px; color: #444; }
+.field-optional { font-size: 11px; color: #444; }
+.section-help { font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
+.section-submit { width: 100%; min-height: 60px; }
+.section-archive { font-size: 13px; }
+.section-archive input { margin: 0 3px 0 0; }
 .footer-table { margin: 0 auto; border-spacing: 0; }
 .footer-table td { padding: 5px; vertical-align: middle; }
 .footer-table hr { width: 100px; }

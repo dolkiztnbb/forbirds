@@ -91,15 +91,43 @@
         </form>
       </section>
 
-      <section id="section-admin" hidden>
-        <table class="post-table p composer-table"><tbody>
-        <form id="section-form" action="/api/sections" method="post">
-          <label class="aligned-label">Адрес </label><input name="slug" required maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="general">
-          <br>
-          <label class="aligned-label">Название </label><input name="title" required maxlength="200">
-          <br>
-          <label class="aligned-label">Описание </label><textarea name="description" maxlength="4000"></textarea>
-          <button>Добавить раздел</button>
+      <section id="section-admin" hidden aria-label="Управление разделами">
+        <h2 id="section-create-title">Создать раздел</h2>
+        <form id="section-form" class="section-editor" action="/api/sections" method="post" aria-labelledby="section-create-title">
+          <table class="post-table p composer-table" role="presentation"><tbody><tr>
+            <td class="composer-body">
+              <label for="section-title">Название</label>
+              <input id="section-title" class="heading-tb" name="title" required maxlength="200" placeholder="Название раздела">
+              <label for="section-slug">Адрес раздела</label>
+              <input id="section-slug" name="slug" required maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="general" aria-describedby="section-slug-help" autocapitalize="none" spellcheck="false">
+              <small id="section-slug-help">Латинские строчные буквы, цифры и дефисы. Например: general или bird-talk.</small>
+              <label for="section-description">Описание <span class="field-optional">(необязательно)</span></label>
+              <textarea id="section-description" name="description" rows="5" maxlength="4000" placeholder="О чём этот раздел и что здесь обсуждают"></textarea>
+            </td>
+            <td class="composer-options">
+              <p class="section-help">Новый раздел появится в списке разделов и станет доступен для создания тем.</p>
+              <button type="submit" class="section-submit">Добавить раздел</button>
+            </td>
+          </tr></tbody></table>
+        </form>
+
+        <h2 id="section-edit-title">Настроить раздел</h2>
+        <form id="section-settings-form" class="section-editor" action="/api/sections" method="post" aria-labelledby="section-edit-title">
+          <table class="post-table p composer-table" role="presentation"><tbody><tr>
+            <td class="composer-body">
+              <label for="section-edit-select">Раздел</label>
+              <select id="section-edit-select" name="section_id" required></select>
+              <label for="section-edit-name">Название</label>
+              <input id="section-edit-name" class="heading-tb" name="title" required maxlength="200">
+              <label for="section-edit-description">Описание <span class="field-optional">(необязательно)</span></label>
+              <textarea id="section-edit-description" name="description" rows="5" maxlength="4000"></textarea>
+            </td>
+            <td class="composer-options">
+              <label class="section-archive"><input id="section-archived" aria-describedby="section-archive-help" name="is_archived" type="checkbox"> Архивный раздел</label>
+              <p class="section-help" id="section-archive-help">В архивном разделе обычные участники не могут создавать темы и отвечать. Существующие сообщения остаются доступны.</p>
+              <button type="submit" class="section-submit" disabled>Сохранить изменения</button>
+            </td>
+          </tr></tbody></table>
         </form>
       </section>
       </div>

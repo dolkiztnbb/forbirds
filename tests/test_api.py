@@ -1022,8 +1022,49 @@ class ApiTests(unittest.TestCase):
             self.ok(self.guest.post('/api/pow/challenge', {}))
         self.ok(self.guest.post('/api/pow/challenge', {}), 429)
 
+    def test_error_languages_and_unchanged_user_content(self):
+        for header, expected in [('en', 'Not found.'), ('en-GB,en;q=0.8', 'Not found.'),
+                                 ('ru;q=0.9,en;q=0.2', 'Не найдено.'),
+                                 ('de,en;q=0.8', 'Not found.'), ('en;q=0', 'Не найдено.'),
+                                 ('unknown', 'Не найдено.'), ('ru', 'Не найдено.')]:
+            response = self.guest.request('GET', '/api/unknown', headers={'Accept-Language': header})
+            self.ok(response, 404)
+            self.assertEqual(response[1]['error']['message'], expected)
+            self.assertEqual(response[1]['error']['code'], 'not_found')
+            self.assertEqual(response[2]['Content-Language'], 'en' if expected == 'Not found.' else 'ru')
+        response = self.guest.request('POST', '/api/auth/login', data={'username': 'nobody', 'password': PASSWORD},
+                                      headers={'Accept-Language': 'en'})
+        self.ok(response, 401)
+        self.assertEqual(response[1]['error']['message'], 'Incorrect username or password.')
+        response = self.guest.request('POST', '/api/auth/login', data={'username': '', 'password': PASSWORD},
+                                      headers={'Accept-Language': 'en'})
+        self.ok(response, 422)
+        self.assertEqual(response[1]['error']['message'], 'Field username: 1 to 32 UTF-8 bytes.')
+        response = self.guest.request('POST', '/api/pow/challenge', data={},
+                                      headers={'Accept-Language': 'en', 'X-CSRF-Token': 'bad'})
+        self.ok(response, 403)
+        self.assertIn('CSRF token', response[1]['error']['message'])
+        response = self.guest.request('GET', '/api/sections', headers={'Accept-Language': 'en'})
+        self.assertEqual(self.ok(response), self.ok(self.guest.get('/api/sections')))
+        for client, path, method, expected in [(self.normal, '/api/moderation/queue', 'GET', 'Moderator permissions are required.'),
+                                               (self.mod, '/api/sections', 'POST', 'Administrator permissions are required.')]:
+            response = client.request(method, path, data={} if method == 'POST' else None,
+                                           headers={'Accept-Language': 'en'})
+            self.ok(response, 403)
+            self.assertEqual(response[1]['error']['code'], 'forbidden')
+            self.assertEqual(response[1]['error']['message'], expected)
+        response = self.guest.request('POST', '/api/threads',
+                                      data={'section_id': self.section, 'title': 'Title', 'body': 'Body'},
+                                      headers={'Accept-Language': 'en'})
+        self.ok(response, 422)
+        self.assertEqual(response[1]['error']['message'], 'Compute the local hash proof before posting.')
+        topic = self.topic(title='Опубликовано', body='Ожидает проверки — <b>без перевода</b>')
+        path = f'/api/posts/{topic["post_id"]}'
+        self.assertEqual(self.ok(self.guest.request('GET', path, headers={'Accept-Language': 'en'})),
+                         self.ok(self.guest.get(path)))
+
     def test_static_layouts_assets_and_private_path_allowlist(self):
-        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
+        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
             self.ok(response)
             self.assertIn("script-src 'self'", response[2]['Content-Security-Policy'])

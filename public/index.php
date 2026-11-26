@@ -13,6 +13,7 @@ if (\ForBirds\StaticFiles::serve($_SERVER['REQUEST_METHOD'], parse_url($_SERVER[
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');
+header('Content-Language: ' . \ForBirds\Language::current());
 header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
 header('Referrer-Policy: no-referrer');
 
@@ -41,9 +42,9 @@ try {
     if ($e->status === 429) {
         header('Retry-After: ' . ($e->retryAfter ?? 60));
     }
-    echo json_encode(['error' => ['code' => $e->errorCode, 'message' => $e->getMessage(), 'retry_after' => $e->retryAfter]], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['error' => ['code' => $e->errorCode, 'message' => \ForBirds\Language::error($e->getMessage()), 'retry_after' => $e->retryAfter]], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {
     error_log((string) $e);
     http_response_code(500);
-    echo '{"error":{"code":"internal_error","message":"Внутренняя ошибка сервера."}}';
+    echo json_encode(['error' => ['code' => 'internal_error', 'message' => \ForBirds\Language::error('Внутренняя ошибка сервера.')]], JSON_UNESCAPED_UNICODE);
 }

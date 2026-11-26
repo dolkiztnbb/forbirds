@@ -8,6 +8,7 @@ require_once __DIR__ . '/MediaFile.php';
 require_once __DIR__ . '/FlagCatalog.php';
 require_once __DIR__ . '/PostingGuard.php';
 require_once __DIR__ . '/StaticFiles.php';
+require_once __DIR__ . '/Language.php';
 
 // No secrets or database files live under public/.
 $storage = getenv('FORBIRDS_STORAGE') ?: dirname(__DIR__) . '/storage';

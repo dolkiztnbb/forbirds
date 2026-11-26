@@ -18,8 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: SHA-256 and worker tests
-        run: node tests/test_hash.cjs
+      - name: SHA-256, worker and translation tests
+        run: npm test
       - name: Install browser tests
         if: matrix.php == '8.5'
         run: |

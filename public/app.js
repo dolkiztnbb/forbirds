@@ -1,7 +1,10 @@
+import { t, locale, initLanguage } from '/i18n.js';
+await initLanguage();
+
 const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
-const labels = { approved: 'Опубликовано', pending: 'Ожидает проверки', rejected: 'Отклонено', deleted: 'Удалено' };
-const roleLabels = { user: 'Участник', moderator: 'Модератор', admin: 'Администратор' };
+const labels = { approved: t("Опубликовано"), pending: t("Ожидает проверки"), rejected: t("Отклонено"), deleted: t("Удалено") };
+const roleLabels = { user: t("Участник"), moderator: t("Модератор"), admin: t("Администратор") };
 let me = null, csrf = '', sections = [], composer = null;
 const staff = () => me && !me.is_banned && ['moderator', 'admin'].includes(me.role);
 const admin = () => staff() && me.role === 'admin';
@@ -26,16 +29,18 @@ function notify(value, isError = true) {
   notice.textContent = value instanceof Error ? value.message : String(value);
 }
 async function api(path, { method = 'GET', body } = {}) {
-  const headers = {};
+  const headers = { 'Accept-Language': document.documentElement.lang };
   if (method === 'POST') headers['X-CSRF-Token'] = csrf;
   if (body !== undefined && !(body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'; body = JSON.stringify(body);
   }
-  const response = await fetch('/api' + path, { method, body, headers, credentials: 'same-origin', cache: 'no-store' });
+  let response;
+  try { response = await fetch('/api' + path, { method, body, headers, credentials: 'same-origin', cache: 'no-store' }); }
+  catch { throw new Error(t('Не удалось связаться с сервером. Проверьте соединение и повторите запрос.')); }
   let payload;
-  try { payload = await response.json(); } catch { throw new Error('Сервер вернул некорректный ответ. Повторите запрос позже.'); }
+  try { payload = await response.json(); } catch { throw new Error(t("Сервер вернул некорректный ответ. Повторите запрос позже.")); }
   if (!response.ok) {
-    const error = new Error(payload.error?.message || `Ошибка ${response.status}`);
+    const error = new Error(payload.error?.message || t('Ошибка {status}', { status: response.status }));
     error.code = payload.error?.code;
     error.retryAfter = Number(payload.error?.retry_after || response.headers.get('Retry-After') || 0);
     throw error;
@@ -44,7 +49,7 @@ async function api(path, { method = 'GET', body } = {}) {
   return payload.data;
 }
 const post = (path, body = {}) => api(path, { method: 'POST', body });
-function date(value) { return new Date(value).toLocaleString('ru-RU'); }
+function date(value) { return new Date(value).toLocaleString(locale()); }
 function empty(container, text) { container.replaceChildren(node('p', text, 'empty')); }
 function paginate(data) {
   const nav = $('#pagination'); nav.replaceChildren();
@@ -52,9 +57,9 @@ function paginate(data) {
     const query = new URLSearchParams(location.search); query.set('page', page);
     return link(text, location.pathname + '?' + query);
   };
-  if (data.page > 1) nav.append(pageLink('← Назад', data.page - 1));
-  nav.append(node('span', `Страница ${data.page}`));
-  if (data.has_more) nav.append(pageLink('Далее →', data.page + 1));
+  if (data.page > 1) nav.append(pageLink(t("← Назад"), data.page - 1));
+  nav.append(node('span', t('Страница {page}', { page: data.page })));
+  if (data.has_more) nav.append(pageLink(t("Далее →"), data.page + 1));
 }
 function pageQuery() {
   const q = new URLSearchParams();
@@ -64,7 +69,7 @@ function pageQuery() {
 }
 function identityUI() {
   $('#auth-form').hidden = !!me; $('#account').hidden = !me;
-  if (me) $('#account-name').replaceChildren(link(me.username, '/profile.html?id=' + me.id), ` · ${roleLabels[me.role]}${me.is_banned ? ' · Заблокирован' : ''}`);
+  if (me) $('#account-name').replaceChildren(link(me.username, '/profile.html?id=' + me.id), ` · ${roleLabels[me.role]}${me.is_banned ? t(' · Заблокирован') : ''}`);
   $('#my-link').hidden = !me;
   $('#profile-link').hidden = !me;
   if (me) $('#profile-link').href = '/profile.html?id=' + me.id;
@@ -74,31 +79,31 @@ function identityUI() {
 async function loadSections() {
   sections = await api('/sections');
   const side = $('#sections'); side.replaceChildren();
-  if (!sections.length) side.append(node('p', 'Разделов пока нет. Администратор может создать первый в панели публикаций.'));
+  if (!sections.length) side.append(node('p', t("Разделов пока нет. Администратор может создать первый в панели публикаций.")));
   for (const section of sections) {
     const details = node('details');
-    const summary = node('summary'); summary.append(link(section.title + (section.is_archived ? ' [архив]' : ''), '/index.html?section_id=' + section.id));
+    const summary = node('summary'); summary.append(link(section.title + (section.is_archived ? t(" [архив]") : ''), '/index.html?section_id=' + section.id));
     details.className = 'section-item'; details.open = true;
     details.append(summary);
     if (section.description) details.append(node('p', section.description, 'section-description'));
-    const recent = node('ol', null, 'section-recent'); recent.setAttribute('aria-label', 'Последние сообщения: ' + section.title);
+    const recent = node('ol', null, 'section-recent'); recent.setAttribute('aria-label', t("Последние сообщения: ") + section.title);
     for (const item of section.recent_posts || []) {
       const row = node('li');
-      const a = link(`${item.is_root ? 'Тема' : 'Ответ'}: ${item.title}`, item.url);
-      a.title = `${item.username || 'Аноним'} · ${date(item.created_at)}`;
+      const a = link(`${item.is_root ? t("Тема") : t("Ответ")}: ${item.title}`, item.url);
+      a.title = `${item.username || t("Аноним")} · ${date(item.created_at)}`;
       row.append(a, node('span', item.excerpt, 'section-excerpt'));
       if (item.status === 'pending') row.append(node('span', labels.pending, 'post-status'));
       recent.append(row);
     }
     if (recent.childElementCount) details.append(recent);
-    else details.append(node('p', 'Сообщений пока нет.', 'section-description'));
+    else details.append(node('p', t("Сообщений пока нет."), 'section-description'));
     side.append(details);
   }
   const select = $('#section-select');
   if (select) {
     select.replaceChildren();
     for (const section of sections) {
-      const option = node('option', section.title + (section.is_archived ? ' [архив]' : ''));
+      const option = node('option', section.title + (section.is_archived ? t(" [архив]") : ''));
       option.value = section.id; option.disabled = !!section.is_archived && !staff();
       select.append(option);
     }
@@ -111,50 +116,50 @@ async function loadNews() {
   const news = await api('/threads?news=1&limit=5');
   const table = $('#news'); table.replaceChildren();
   for (const item of news.items) {
-    const row = node('tr'), when = node('td', new Date(item.created_at).toLocaleDateString('ru-RU'), 'news-date');
+    const row = node('tr'), when = node('td', new Date(item.created_at).toLocaleDateString(locale()), 'news-date');
     const title = node('td'); title.append(link(item.title, '/post.html?id=' + item.id));
-    if (item.status === 'pending') title.append(node('span', ' — Ожидает проверки', 'post-status'));
+    if (item.status === 'pending') title.append(node('span', t(" — Ожидает проверки"), 'post-status'));
     row.append(when, title); table.append(row);
   }
   if (!news.items.length) {
-    const row = node('tr'); row.append(node('td', 'Опубликованных новостей пока нет.')); table.append(row);
+    const row = node('tr'); row.append(node('td', t("Опубликованных новостей пока нет."))); table.append(row);
   }
 }
 async function profile(id) {
   const user = await api('/users/' + id);
   const dialog = node('dialog');
-  dialog.append(link('Открыть страницу пользователя →', '/profile.html?id=' + id), node('h2', user.username), node('p', `${roleLabels[user.role]} · С нами с ${date(user.created_at)}`), node('p', user.is_banned ? 'Аккаунт заблокирован' : 'Аккаунт активен'));
-  if ('auto_approve' in user) dialog.append(node('p', 'Автоподтверждение: ' + (user.auto_approve ? 'выдано' : 'не выдано')));
+  dialog.append(link(t("Открыть страницу пользователя →"), '/profile.html?id=' + id), node('h2', user.username), node('p', t('{role} · С нами с {date}', { role: roleLabels[user.role], date: date(user.created_at) })), node('p', user.is_banned ? t("Аккаунт заблокирован") : t("Аккаунт активен")));
+  if ('auto_approve' in user) dialog.append(node('p', t("Автоподтверждение: ") + (user.auto_approve ? t("выдано") : t("не выдано"))));
   const canManage = staff() && user.id !== me.id && user.role !== 'admin' && (admin() || user.role === 'user');
   if (canManage) {
     for (const [action, enabled, text] of [
-      ['trust', !user.auto_approve, user.auto_approve ? 'Отозвать автоподтверждение' : 'Выдать автоподтверждение'],
-      ['ban', !user.is_banned, user.is_banned ? 'Снять бан' : 'Забанить'],
+      ['trust', !user.auto_approve, user.auto_approve ? t("Отозвать автоподтверждение") : t("Выдать автоподтверждение")],
+      ['ban', !user.is_banned, user.is_banned ? t("Снять бан") : t("Забанить")],
     ]) dialog.append(button(text, async () => {
       if (!confirm(`${text}: ${user.username}?`)) return;
       await post(`/users/${id}/${action}`, { enabled }); dialog.close(); await profile(id);
     }));
-    if (admin()) dialog.append(button(user.role === 'moderator' ? 'Снять модератора' : 'Назначить модератором', async () => {
-      if (!confirm('Изменить роль ' + user.username + '?')) return;
+    if (admin()) dialog.append(button(user.role === 'moderator' ? t("Снять модератора") : t("Назначить модератором"), async () => {
+      if (!confirm(t("Изменить роль ") + user.username + '?')) return;
       await post(`/users/${id}/role`, { role: user.role === 'moderator' ? 'user' : 'moderator' }); dialog.close(); await profile(id);
     }));
   }
-  dialog.append(button('Закрыть', async () => dialog.close()));
+  dialog.append(button(t("Закрыть"), async () => dialog.close()));
   dialog.addEventListener('close', () => dialog.remove(), { once: true });
   document.body.append(dialog); dialog.showModal();
 }
 function showImage(file) {
   if ($('.image-viewer')) return;
   const dialog = node('dialog', null, 'image-viewer');
-  dialog.setAttribute('aria-label', 'Просмотр изображения: ' + file.original_name);
+  dialog.setAttribute('aria-label', t("Просмотр изображения: ") + file.original_name);
   const header = node('div', null, 'image-viewer-header');
-  const close = button('Закрыть', async () => dialog.close());
-  header.append(node('strong', file.original_name), link('Скачать оригинал', file.download_url), close);
-  const status = node('p', 'Загрузка изображения…'); status.setAttribute('role', 'status');
+  const close = button(t("Закрыть"), async () => dialog.close());
+  header.append(node('strong', file.original_name), link(t("Скачать оригинал"), file.download_url), close);
+  const status = node('p', t("Загрузка изображения…")); status.setAttribute('role', 'status');
   const stage = node('div', null, 'image-viewer-stage');
   const image = node('img'); image.alt = file.original_name;
   image.addEventListener('load', () => { status.hidden = true; });
-  image.addEventListener('error', () => { status.hidden = false; status.textContent = 'Не удалось загрузить изображение. Возможно, доступ к сообщению изменился.'; });
+  image.addEventListener('error', () => { status.hidden = false; status.textContent = t("Не удалось загрузить изображение. Возможно, доступ к сообщению изменился."); });
   stage.append(image); dialog.append(header, status, stage);
   const focused = document.activeElement;
   dialog.addEventListener('close', () => {
@@ -171,9 +176,9 @@ function showImage(file) {
 function videoPlayer(file) {
   const video = node('video', null, 'attachment-video');
   video.controls = true; video.preload = 'none'; video.playsInline = true;
-  video.setAttribute('aria-label', 'Видео: ' + file.original_name);
+  video.setAttribute('aria-label', t("Видео: ") + file.original_name);
   video.src = file.view_url;
-  const fallback = node('p', 'Если браузер не поддерживает кодек этого видео, скачайте оригинал.', 'video-help');
+  const fallback = node('p', t("Если браузер не поддерживает кодек этого видео, скачайте оригинал."), 'video-help');
   fallback.hidden = true;
   video.addEventListener('error', () => { fallback.hidden = false; });
   const player = node('div'); player.append(video, fallback); return player;
@@ -189,14 +194,14 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   table.dataset.status = item.status;
   const tbody = node('tbody'), row = node('tr'), author = node('td', null, 'post-author'), content = node('td', null, 'post-content');
   const name = node('div', null, 'author-name');
-  const username = item.username || 'Аноним';
+  const username = item.username || t("Аноним");
   if (item.user_id) {
     const a = link(username, '/profile.html?id=' + item.user_id);
     a.className = 'role-' + (item.author_role === 'moderator' ? 'mod' : item.author_role || 'user');
     if (item.author_banned) { const s = node('s'); s.append(a); name.append(s); } else name.append(a);
   } else name.textContent = username;
   const avatar = node('img', null, 'avatar'); avatar.src = item.avatar_url || '/avatars/noavatar.png'; avatar.alt = ''; avatar.width = 100; avatar.height = 100;
-  author.append(name, node('div', roleLabels[item.author_role] || 'Гость', 'author-rank'), avatar);
+  author.append(name, node('div', roleLabels[item.author_role] || t("Гость"), 'author-rank'), avatar);
   if (item.flag) author.append(flagBadge(item.flag));
   const header = node('div', null, 'post-header');
   if (title) {
@@ -218,16 +223,16 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
           if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
           event.preventDefault(); showImage(file);
         });
-        open.setAttribute('aria-label', (file.spoiler ? 'Открыть изображение под спойлером: ' : 'Открыть изображение: ') + file.original_name);
+        open.setAttribute('aria-label', (file.spoiler ? t("Открыть изображение под спойлером: ") : t("Открыть изображение: ")) + file.original_name);
         const image = node('img', null, file.spoiler ? 'spoiler-marker img2x' : 'attachment-preview');
         image.src = file.spoiler ? '/static/preview/spolier.png' : file.preview_url;
-        image.alt = file.spoiler ? 'Изображение под спойлером' : 'Превью: ' + file.original_name;
+        image.alt = file.spoiler ? t("Изображение под спойлером") : t("Превью: ") + file.original_name;
         image.loading = 'lazy';
         open.append(image); box.append(open, node('div', file.original_name));
-        box.append(link('Скачать полноразмерную картинку', file.download_url));
+        box.append(link(t("Скачать полноразмерную картинку"), file.download_url));
       } else if (file.is_video) {
         if (file.spoiler) {
-          const details = node('details'), summary = node('summary', 'Видео под спойлером: ' + file.original_name);
+          const details = node('details'), summary = node('summary', t("Видео под спойлером: ") + file.original_name);
           details.append(summary);
           details.addEventListener('toggle', () => {
             if (details.open && !details.querySelector('video')) details.append(videoPlayer(file));
@@ -235,40 +240,40 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
           });
           box.append(details);
         } else box.append(node('div', file.original_name), videoPlayer(file));
-        box.append(link('Скачать видео: ' + file.original_name, file.download_url));
+        box.append(link(t("Скачать видео: ") + file.original_name, file.download_url));
       } else {
         const icon = node('img', null, 'img2x'); icon.src = '/icons/file.png'; icon.alt = '';
         box.append(icon);
         if (file.spoiler) {
-          const details = node('details'), summary = node('summary', 'Файл под спойлером');
+          const details = node('details'), summary = node('summary', t("Файл под спойлером"));
           details.append(summary, link(file.original_name, file.download_url)); box.append(details);
         } else box.append(link(file.original_name, file.download_url));
       }
-      box.append(node('div', `${(file.byte_size / 1024).toFixed(1)} КиБ`)); files.append(box);
+      box.append(node('div', t('{size} КиБ', { size: (file.byte_size / 1024).toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }))); files.append(box);
     }
     content.append(files);
   }
   if (replyCount !== undefined) {
     const links = node('p', null, 'post-links');
-    const count = `Ответов: ${replyCount}` + (staff() && pendingReplyCount ? ` (на проверке: ${pendingReplyCount})` : '');
+    const count = t('Ответов: {count}', { count: replyCount }) + (staff() && pendingReplyCount ? t(' (на проверке: {count})', { count: pendingReplyCount }) : '');
     links.append(link(count + ' →', '/post.html?id=' + item.thread_id)); content.append(links);
   }
   if (staff() && item.status !== 'deleted') {
     const tools = node('div', null, 'mod-tools');
-    for (const [action, text] of [['approve', 'Подтвердить'], ['unapprove', 'Снять подтверждение'], ['reject', 'Отклонить'], ['delete', 'Удалить']]) {
+    for (const [action, text] of [['approve', t("Подтвердить")], ['unapprove', t("Снять подтверждение")], ['reject', t("Отклонить")], ['delete', t("Удалить")]]) {
       const b = button(text, async () => {
-        if (action === 'delete' && !confirm('Удалить сообщение №' + item.id + '?')) return;
+        if (action === 'delete' && !confirm(t("Удалить сообщение №") + item.id + '?')) return;
         b.disabled = true;
         try {
           await post(`/posts/${item.id}/moderate`, { action });
-          notify(`Сообщение №${item.id}: ${labels[{ approve: 'approved', unapprove: 'pending', reject: 'rejected', delete: 'deleted' }[action]]}`, false);
+          notify(t('Сообщение №{id}: {status}', { id: item.id, status: labels[{ approve: 'approved', unapprove: 'pending', reject: 'rejected', delete: 'deleted' }[action]] }), false);
           await loadView(); await loadNews(); await loadSections();
         } finally { if (b.isConnected) b.disabled = false; }
       });
       b.disabled = (action === 'approve' && item.status === 'approved') || (action === 'unapprove' && item.status === 'pending');
       tools.append(b);
     }
-    if (item.user_id && item.user_id !== me.id && item.author_role !== 'admin') tools.append(button('Права / бан автора', () => profile(item.user_id)));
+    if (item.user_id && item.user_id !== me.id && item.author_role !== 'admin') tools.append(button(t("Права / бан автора"), () => profile(item.user_id)));
     header.append(tools);
   }
   row.append(author, content); tbody.append(row); table.append(tbody); table.id = 'post-' + item.id;
@@ -276,14 +281,14 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
 }
 async function loadFeed() {
   const query = pageQuery(), sectionId = params.get('section_id'), search = params.get('q');
-  let title = 'Главная', description = '';
+  let title = t("Главная"), description = '';
   if (sectionId) {
     query.set('section_id', sectionId);
     const section = sections.find(s => String(s.id) === sectionId);
-    title = section?.title || 'Раздел'; description = section?.description || '';
+    title = section?.title || t("Раздел"); description = section?.description || '';
   } else if (search) {
-    query.set('q', search); title = 'Поиск: ' + search; description = 'Поиск по опубликованным темам и ответам.';
-  } else if (params.get('view') === 'all') { title = 'Все темы'; description = 'Публикации из всех разделов.'; }
+    query.set('q', search); title = t("Поиск: ") + search; description = t("Поиск по опубликованным темам и ответам.");
+  } else if (params.get('view') === 'all') { title = t("Все темы"); description = t("Публикации из всех разделов."); }
   else if (staff()) description = '';
   else query.set('featured', '1');
   $('#page-title').textContent = title; $('#feed-description').textContent = description;
@@ -292,23 +297,23 @@ async function loadFeed() {
   const posts = await Promise.all(data.items.map(t => api('/posts/' + t.post_id).then(p => ({ ...t, post: p })).catch(() => null)));
   container.replaceChildren();
   for (const item of posts.filter(Boolean)) container.append(renderPost(item.post, { title: item.title, replyCount: item.reply_count, pendingReplyCount: item.pending_reply_count }));
-  if (!posts.filter(Boolean).length) empty(container, 'Тем пока нет. Создайте первую тему или выберите другой раздел.');
+  if (!posts.filter(Boolean).length) empty(container, t("Тем пока нет. Создайте первую тему или выберите другой раздел."));
   paginate(data);
 }
 async function loadThread() {
   const id = params.get('id');
-  if (!/^[1-9][0-9]*$/.test(id || '')) throw new Error('Не указан номер темы. Выберите тему в ленте.');
+  if (!/^[1-9][0-9]*$/.test(id || '')) throw new Error(t("Не указан номер темы. Выберите тему в ленте."));
   const data = await api('/threads/' + id + '?' + pageQuery());
   $('#page-title').textContent = data.title; document.title = data.title + ' — ForBirds';
   $('#back-to-section').href = '/index.html?section_id=' + data.section_id;
   const container = $('#thread'); container.replaceChildren(renderPost(data.post, { title: data.title, threadLink: false }));
   container.append(node('hr'));
   for (const reply of data.replies.items) container.append(renderPost(reply));
-  if (!data.replies.items.length) container.append(node('p', 'Ответов пока нет.'));
+  if (!data.replies.items.length) container.append(node('p', t("Ответов пока нет.")));
   paginate(data.replies);
   const settings = $('#thread-settings'); settings.replaceChildren();
   if (staff()) {
-    for (const [key, title] of [['is_locked', 'Тема закрыта'], ['is_news', 'В новостях'], ['is_featured', 'На главной']]) {
+    for (const [key, title] of [['is_locked', t("Тема закрыта")], ['is_news', t("В новостях")], ['is_featured', t("На главной")]]) {
       const label = node('label', title + ' '), input = node('input'); input.type = 'checkbox'; input.checked = !!data[key];
       input.addEventListener('change', async () => {
         input.disabled = true;
@@ -320,7 +325,7 @@ async function loadThread() {
   const section = sections.find(s => s.id === data.section_id);
   const blocked = !!me?.is_banned || (!staff() && (!!data.is_locked || !!section?.is_archived));
   $('#composer').hidden = blocked;
-  if (blocked) container.append(node('p', me?.is_banned ? 'Аккаунт заблокирован.' : 'Тема или раздел закрыты для публикации.'));
+  if (blocked) container.append(node('p', me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации.")));
   if (!blocked && !composer) composer = new Composer(id);
 }
 async function loadDashboard() {
@@ -330,15 +335,15 @@ async function loadDashboard() {
   $('#section-admin').hidden = !admin() || mode !== 'new';
   if (mode === 'new') {
     if (!composer && !me?.is_banned) composer = new Composer(null);
-    if (!sections.length) container.append(node('p', 'Сначала администратор должен добавить раздел ниже.'));
-    if (me?.is_banned) container.append(node('p', 'Аккаунт заблокирован. Публикация недоступна.'));
+    if (!sections.length) container.append(node('p', t("Сначала администратор должен добавить раздел ниже.")));
+    if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
   }
   if (mode === 'queue' || mode === 'audit') {
-    if (!staff()) { empty(container, 'Для этой страницы нужны права модератора.'); return; }
-    container.append(link(mode === 'queue' ? 'Журнал модерации →' : '← Очередь', '?mode=' + (mode === 'queue' ? 'audit' : 'queue')));
+    if (!staff()) { empty(container, t("Для этой страницы нужны права модератора.")); return; }
+    container.append(link(mode === 'queue' ? t("Журнал модерации →") : t("← Очередь"), '?mode=' + (mode === 'queue' ? 'audit' : 'queue')));
     const data = await api('/moderation/' + mode + '?' + pageQuery());
-    if (!data.items.length) container.append(node('p', mode === 'queue' ? 'Очередь пуста.' : 'Журнал пуст.'));
+    if (!data.items.length) container.append(node('p', mode === 'queue' ? t("Очередь пуста.") : t("Журнал пуст.")));
     if (mode === 'audit') {
       for (const entry of data.items) container.append(node('p', `${date(entry.created_at)} · #${entry.actor_id}: ${entry.action} · ${entry.target_type} №${entry.target_id} · ${entry.details}`));
     } else {
@@ -348,30 +353,30 @@ async function loadDashboard() {
     paginate(data); return;
   }
   if (mode === 'mine') {
-    if (!me) { empty(container, 'Войдите, чтобы видеть свои сообщения, в том числе ожидающие проверки.'); return; }
+    if (!me) { empty(container, t("Войдите, чтобы видеть свои сообщения, в том числе ожидающие проверки.")); return; }
     const data = await api('/me/posts?' + pageQuery());
     const posts = await Promise.all(data.items.map(p => api('/posts/' + p.id).catch(() => ({ ...p, username: me.username, author_role: me.role }))));
     for (const p of posts) container.append(renderPost(p));
-    if (!posts.length) empty(container, 'Вы ещё ничего не опубликовали.');
+    if (!posts.length) empty(container, t("Вы ещё ничего не опубликовали."));
     paginate(data); return;
   }
-  empty(container, 'Неизвестная вкладка.');
+  empty(container, t("Неизвестная вкладка."));
 }
 async function loadProfile() {
   const id = params.get('id') || (me ? String(me.id) : '');
-  if (!/^[1-9][0-9]*$/.test(id)) throw new Error('Выберите пользователя или войдите, чтобы открыть свой профиль.');
+  if (!/^[1-9][0-9]*$/.test(id)) throw new Error(t("Выберите пользователя или войдите, чтобы открыть свой профиль."));
   const user = await api('/users/' + id);
   const data = await api(`/users/${id}/posts?` + pageQuery());
-  $('#page-title').textContent = 'Профиль: ' + user.username;
+  $('#page-title').textContent = t("Профиль: ") + user.username;
   document.title = user.username + ' — ForBirds';
   $('#profile').hidden = false;
   $('#profile-name').textContent = user.username;
   $('#profile-avatar').src = user.avatar_url;
   $('#profile-flag').replaceChildren(...(user.flag ? [flagBadge(user.flag)] : []));
-  $('#profile-description').textContent = user.description || 'Пользователь пока ничего не рассказал о себе.';
-  $('#profile-meta').textContent = `${roleLabels[user.role]} · С нами с ${date(user.created_at)}${user.is_banned ? ' · Заблокирован' : ''}`;
+  $('#profile-description').textContent = user.description || t("Пользователь пока ничего не рассказал о себе.");
+  $('#profile-meta').textContent = t('{role} · С нами с {date}', { role: roleLabels[user.role], date: date(user.created_at) }) + (user.is_banned ? t(' · Заблокирован') : '');
   const actions = $('#profile-actions'); actions.replaceChildren();
-  if (staff()) actions.append(button('Права / бан пользователя', () => profile(user.id)));
+  if (staff()) actions.append(button(t("Права / бан пользователя"), () => profile(user.id)));
   const own = me?.id === user.id;
   $('#profile-editor').hidden = !own || !!me?.is_banned;
   if (own) {
@@ -379,7 +384,7 @@ async function loadProfile() {
     const flags = await api('/flags');
     const select = $('#profile-flag-select');
     select.replaceChildren();
-    const none = node('option', 'Без флага'); none.value = ''; select.append(none);
+    const none = node('option', t("Без флага")); none.value = ''; select.append(none);
     for (const flag of flags) {
       const option = node('option', flag.label); option.value = flag.file; select.append(option);
     }
@@ -389,27 +394,27 @@ async function loadProfile() {
       $('#profile-flag-preview').replaceChildren(...(flag ? [flagBadge(flag)] : []));
     };
     select.onchange = preview; preview();
-    $('#profile-flag-help').textContent = flags.length ? 'Флаг отображается в профиле и возле ваших сообщений. Выбор необязателен.' : 'В папке флагов пока нет доступных изображений.';
+    $('#profile-flag-help').textContent = flags.length ? t("Флаг отображается в профиле и возле ваших сообщений. Выбор необязателен.") : t("В папке флагов пока нет доступных изображений.");
   }
-  $('#profile-posts-note').textContent = staff() ? 'Вам как сотруднику видны все статусы сообщений.'
-    : own ? 'Здесь также видны ваши ожидающие проверки сообщения в доступных вам темах.' : 'Только опубликованные сообщения в открытых для просмотра темах.';
+  $('#profile-posts-note').textContent = staff() ? t("Вам как сотруднику видны все статусы сообщений.")
+    : own ? t("Здесь также видны ваши ожидающие проверки сообщения в доступных вам темах.") : t("Только опубликованные сообщения в открытых для просмотра темах.");
   const container = $('#profile-posts'); container.replaceChildren();
-  if (!data.items.length) empty(container, 'Нет доступных сообщений.');
+  if (!data.items.length) empty(container, t("Нет доступных сообщений."));
   else {
     const table = node('table', null, 'table news-table profile-posts-table');
-    const caption = node('caption', 'Темы и ответы · новые сверху');
+    const caption = node('caption', t("Темы и ответы · новые сверху"));
     const head = node('thead'), headers = node('tr');
-    for (const text of ['Дата', 'Сообщение']) { const th = node('th', text); th.scope = 'col'; headers.append(th); }
+    for (const text of [t("Дата"), t("Сообщение")]) { const th = node('th', text); th.scope = 'col'; headers.append(th); }
     head.append(headers);
     const rows = node('tbody');
     for (const item of data.items) {
       const row = node('tr'), when = node('td', null, 'news-date');
       const time = node('time'); time.dateTime = item.created_at;
       const timestamp = new Date(item.created_at);
-      time.append(node('span', timestamp.toLocaleDateString('ru-RU')), node('span', timestamp.toLocaleTimeString('ru-RU')));
+      time.append(node('span', timestamp.toLocaleDateString(locale())), node('span', timestamp.toLocaleTimeString(locale())));
       when.append(time);
       const content = node('td');
-      content.append(link(`${item.is_root ? 'Тема' : 'Ответ'}: ${item.title} · №${item.id}`, item.url));
+      content.append(link(`${item.is_root ? t("Тема") : t("Ответ")}: ${item.title} · №${item.id}`, item.url));
       if (item.status !== 'approved' || staff()) content.append(node('span', ' — ' + labels[item.status], 'post-status'));
       content.append(node('div', item.excerpt, 'profile-excerpt'));
       row.dataset.status = item.status; row.append(when, content); rows.append(row);
@@ -426,15 +431,15 @@ if (profileForm) {
     const submit = profileForm.querySelector('[type=submit]');
     if (submit.disabled) return;
     submit.disabled = true;
-    const result = $('#profile-result'); result.textContent = 'Сохранение…';
+    const result = $('#profile-result'); result.textContent = t("Сохранение…");
     try {
       const data = new FormData(profileForm), file = profileForm.elements.avatar.files[0];
       if (!file) data.delete('avatar');
       data.set('remove_avatar', profileForm.elements.remove_avatar.checked ? '1' : '0');
-      if (file && file.size > 2 * 1024 * 1024) throw new Error('Аватарка должна быть не больше 2 МиБ.');
+      if (file && file.size > 2 * 1024 * 1024) throw new Error(t("Аватарка должна быть не больше 2 МиБ."));
       me = await post('/me/profile', data);
       profileForm.reset(); identityUI(); await loadProfile();
-      result.textContent = 'Профиль сохранён.';
+      result.textContent = t("Профиль сохранён.");
     } catch (error) { result.textContent = error.message; }
     finally { submit.disabled = false; }
   });
@@ -464,7 +469,7 @@ class Composer {
     $('#section-select').required = !threadId;
     this.form.elements.title.required = !threadId;
     $('#pow-start').addEventListener('click', () => this.solve().catch(notify));
-    $('#pow-cancel').addEventListener('click', () => this.cancel('Проверка отменена.'));
+    $('#pow-cancel').addEventListener('click', () => this.cancel(t("Проверка отменена.")));
     this.form.addEventListener('submit', event => { event.preventDefault(); this.submit().catch(notify); });
     $('#file-input').addEventListener('change', event => { this.addFiles([...event.target.files]); event.target.value = ''; });
     const drop = $('#drop-zone');
@@ -486,41 +491,41 @@ class Composer {
     try {
       const status = await api('/posting-status');
       this.interval = status.interval_seconds; this.until = Date.now() + status.retry_after * 1000;
-      if (!this.proof && !this.worker) $('#pow-status').textContent = 'Нажмите кнопку для одноразовой проверки перед отправкой.';
+      if (!this.proof && !this.worker) $('#pow-status').textContent = t("Нажмите кнопку для одноразовой проверки перед отправкой.");
     } finally {
       // Issuing a challenge rechecks the server's timer after a transient read failure.
       this.ready = true; this.controls();
     }
   }
-  cancel(message = 'Нужна новая проверка.') {
+  cancel(message = t("Нужна новая проверка.")) {
     if (this.worker) this.worker.terminate(); this.worker = null; this.proof = null;
     $('#pow-status').textContent = message; this.controls();
   }
   controls() {
     const wait = Math.max(0, Math.ceil((this.until - Date.now()) / 1000));
-    if (this.proof && Date.now() >= this.proof.expires_at * 1000) this.cancel('Решение истекло. Вычислите новую проверку.');
-    $('#cooldown').textContent = wait ? `Следующая публикация через ${wait} сек. Затем решите проверку.` : `Интервал: ${this.interval} сек. Проверка обязательна для каждой публикации.`;
+    if (this.proof && Date.now() >= this.proof.expires_at * 1000) this.cancel(t("Решение истекло. Вычислите новую проверку."));
+    $('#cooldown').textContent = wait ? t('Следующая публикация через {seconds} сек. Затем решите проверку.', { seconds: wait }) : t('Интервал: {seconds} сек. Проверка обязательна для каждой публикации.', { seconds: this.interval });
     $('#pow-start').disabled = !this.ready || !!wait || !!this.worker || this.busy;
-    $('#pow-start').textContent = this.proof ? 'Вычислить заново' : 'Вычислить проверку';
+    $('#pow-start').textContent = this.proof ? t("Вычислить заново") : t("Вычислить проверку");
     $('#pow-cancel').hidden = !this.worker;
     $('#post-submit').disabled = !this.ready || !!wait || !this.proof || this.busy || !!me?.is_banned || (!this.threadId && !$('#section-select').value);
   }
   async solve() {
     if (!this.ready || this.busy || this.worker || Date.now() < this.until) return;
-    this.cancel('Получение задачи…'); this.ready = false; this.controls();
+    this.cancel(t("Получение задачи…")); this.ready = false; this.controls();
     try {
       const challenge = await post('/pow/challenge');
       const worker = new Worker('/pow-worker.js'); this.worker = worker;
-      $('#pow-status').textContent = `Вычисление SHA-256 (${challenge.difficulty} бит)…`;
+      $('#pow-status').textContent = t('Вычисление SHA-256 ({bits} бит)…', { bits: challenge.difficulty });
       worker.onmessage = ({ data }) => {
-        if (data.type === 'progress') $('#pow-status').textContent = `Подбираем хэш: ${data.attempts.toLocaleString('ru-RU')} попыток…`;
+        if (data.type === 'progress') $('#pow-status').textContent = t('Подбираем хэш: {count} попыток…', { count: data.attempts.toLocaleString(locale()) });
         else if (data.type === 'solved') {
           worker.terminate(); this.worker = null;
           this.proof = { pow_id: challenge.id, pow_nonce: data.nonce, expires_at: challenge.expires_at };
-          $('#pow-status').textContent = 'Проверка решена. Можно отправлять сообщение.'; this.controls();
-        } else { this.cancel(data.message || 'Ошибка вычисления.'); }
+          $('#pow-status').textContent = t("Проверка решена. Можно отправлять сообщение."); this.controls();
+        } else { this.cancel(t({ pow_difficulty: 'Неподдерживаемая сложность проверки.', pow_timeout: 'Вычисление заняло слишком много времени. Попробуйте новую проверку.' }[data.code] || 'Ошибка вычисления.')); }
       };
-      worker.onerror = () => this.cancel('Не удалось запустить вычисление. Проверьте поддержку Web Worker.');
+      worker.onerror = () => this.cancel(t("Не удалось запустить вычисление. Проверьте поддержку Web Worker."));
       worker.postMessage(challenge);
     } catch (error) {
       if (error.retryAfter) this.until = Date.now() + error.retryAfter * 1000;
@@ -531,25 +536,25 @@ class Composer {
     if (this.busy) return;
     const next = [...this.files, ...files.map(file => ({ file, spoiler: false }))];
     if (next.length > 10 || next.some(f => f.file.size > 5 * 1024 * 1024 || !f.file.size) || next.reduce((n, f) => n + f.file.size, 0) > 20 * 1024 * 1024) {
-      notify('Лимит: до 10 непустых файлов, 5 МиБ на файл, 20 МиБ суммарно.'); return;
+      notify(t("Лимит: до 10 непустых файлов, 5 МиБ на файл, 20 МиБ суммарно.")); return;
     }
     this.files = next; this.renderFiles();
   }
   renderFiles() {
     const list = $('#file-list'); list.replaceChildren();
     this.files.forEach((entry, i) => {
-      const item = node('li'), label = node('label', 'Под спойлером'), checkbox = node('input');
+      const item = node('li'), label = node('label', t("Под спойлером")), checkbox = node('input');
       checkbox.type = 'checkbox'; checkbox.checked = entry.spoiler;
       checkbox.addEventListener('change', () => { entry.spoiler = checkbox.checked; });
       label.prepend(checkbox);
-      item.append(node('span', `${entry.file.name} · ${(entry.file.size / 1024).toFixed(1)} КиБ`), label,
-        button('Убрать', async () => { if (!this.busy) { this.files.splice(i, 1); this.renderFiles(); } }));
+      item.append(node('span', `${entry.file.name} · ` + t('{size} КиБ', { size: (entry.file.size / 1024).toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) })), label,
+        button(t("Убрать"), async () => { if (!this.busy) { this.files.splice(i, 1); this.renderFiles(); } }));
       list.append(item);
     });
   }
   async submit() {
     if (this.busy) return;
-    if (!this.proof || this.worker || Date.now() < this.until) { notify('Дождитесь окончания интервала и решите хэш-проверку.'); return; }
+    if (!this.proof || this.worker || Date.now() < this.until) { notify(t("Дождитесь окончания интервала и решите хэш-проверку.")); return; }
     if (!this.form.reportValidity()) return;
     this.busy = true; this.controls();
     const data = new FormData();
@@ -560,17 +565,18 @@ class Composer {
       if (staff()) { data.set('is_news', this.form.elements.is_news.checked ? '1' : '0'); data.set('is_featured', this.form.elements.is_featured.checked ? '1' : '0'); }
     }
     this.files.forEach((entry, i) => { data.append('files[]', entry.file); if (entry.spoiler) data.append('spoilers[]', String(i)); });
-    $('#post-result').textContent = 'Отправка…';
+    $('#post-result').textContent = t("Отправка…");
     try {
       const result = await post(this.threadId ? `/threads/${this.threadId}/replies` : '/threads', data);
-      const message = `Сообщение №${result.post_id}: ${labels[result.status]}.`;
+      const message = t('Сообщение №{id}: {status}.', { id: result.post_id, status: labels[result.status] });
       this.form.elements.body.value = ''; this.files = []; this.renderFiles();
-      this.cancel('Для следующей публикации нужна новая проверка.');
+      this.cancel(t("Для следующей публикации нужна новая проверка."));
       // Never let a failed status refresh turn a successful POST into an apparent failure.
       this.until = Date.now() + this.interval * 1000;
       $('#post-result').textContent = message;
       if (!this.threadId && (me || result.status === 'approved')) {
-        sessionStorage.setItem('forbirds-notice', message); location.assign('/post.html?id=' + result.thread_id); return;
+        try { sessionStorage.setItem('forbirds-notice', JSON.stringify({ id: result.post_id, status: result.status })); } catch { /* Storage disabled. */ }
+        location.assign('/post.html?id=' + result.thread_id); return;
       }
       notify(message, false);
       if (this.threadId) await loadThread().catch(notify);
@@ -579,7 +585,7 @@ class Composer {
     } catch (error) {
       $('#post-result').textContent = error.message;
       if (error.retryAfter) this.until = Date.now() + error.retryAfter * 1000;
-      if (error.code?.startsWith('pow_') || error.code === 'posting_cooldown') this.cancel('Получите новую проверку.');
+      if (error.code?.startsWith('pow_') || error.code === 'posting_cooldown') this.cancel(t("Получите новую проверку."));
       throw error;
     } finally { this.busy = false; this.controls(); }
   }
@@ -591,7 +597,7 @@ function adminSections() {
     event.preventDefault(); const submit = form.querySelector('button'); submit.disabled = true;
     try {
       await post('/sections', Object.fromEntries(new FormData(form)));
-      form.reset(); await loadSections(); options(); notify('Раздел создан.', false); composer?.controls();
+      form.reset(); await loadSections(); options(); notify(t("Раздел создан."), false); composer?.controls();
     } catch (e) { notify(e); } finally { submit.disabled = false; }
   });
   const formEdit = $('#section-settings-form'), select = formEdit.elements.section_id;
@@ -615,7 +621,7 @@ function adminSections() {
     save.disabled = true;
     try {
       await post(`/sections/${select.value}/settings`, { title: titleInput.value, description: description.value, is_archived: archived.checked });
-      await loadSections(); options(); notify('Настройки раздела сохранены.', false);
+      await loadSections(); options(); notify(t("Настройки раздела сохранены."), false);
     } catch (error) { notify(error); } finally { save.disabled = false; }
   });
   options();
@@ -636,8 +642,12 @@ async function main() {
   const session = await api('/session'); me = session.user; identityUI();
   await Promise.all([loadSections(), loadNews()]);
   await loadView(); adminSections();
-  const message = sessionStorage.getItem('forbirds-notice');
-  if (message) { notify(message, false); sessionStorage.removeItem('forbirds-notice'); }
+  let message;
+  try { message = sessionStorage.getItem('forbirds-notice'); } catch { /* Storage disabled. */ }
+  if (message) {
+    try { const notice = JSON.parse(message); notify(t('Сообщение №{id}: {status}.', { id: notice.id, status: labels[notice.status] }), false); } catch { /* Ignore obsolete notices. */ }
+    sessionStorage.removeItem('forbirds-notice');
+  }
   if (/^#post-[0-9]+$/.test(location.hash)) $(location.hash)?.scrollIntoView();
 }
 main().catch(error => {

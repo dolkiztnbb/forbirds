@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ForBirds — форум</title>
+  <title data-i18n="ForBirds — форум">ForBirds — форум</title>
   <link rel="stylesheet" href="/general.css">
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/app.js"></script>
@@ -11,82 +11,83 @@
 <body data-page="post">
   <header>
     <div class="sub">
-    <nav class="site-nav" aria-label="Навигация">
-      <a href="/">Главная</a> <a href="/index.html?view=all">Все темы</a>
-      <a href="/dashboard.html">Создать тему</a> <a href="/profile.html" id="profile-link" hidden>Моя страница</a> <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
-      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
+    <nav class="site-nav" aria-label="Навигация" data-i18n-aria-label="Навигация">
+      <a href="/"><span data-i18n="Главная">Главная</span></a> <a href="/index.html?view=all"><span data-i18n="Все темы">Все темы</span></a>
+      <a href="/dashboard.html"><span data-i18n="Создать тему">Создать тему</span></a> <a href="/profile.html" id="profile-link" hidden><span data-i18n="Моя страница">Моя страница</span></a> <a href="/dashboard.html?mode=mine" id="my-link" hidden><span data-i18n="Мои сообщения">Мои сообщения</span></a>
+      <a href="/dashboard.html?mode=queue" id="queue-link" hidden><span data-i18n="Модерация">Модерация</span></a>
     </nav>
+      <button id="language-switch" type="button" hidden></button>
       <form id="auth-form" action="/api/auth/login" method="post">
-        Вход <input aria-label="Имя пользователя" placeholder="имя пользователя" name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+">
-        <input aria-label="Пароль" placeholder="пароль" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72">
-        <button name="action" value="login">Войти</button>
-        <button name="action" value="register">Регистрация</button>
+        <span data-i18n="Вход">Вход</span> <input aria-label="Имя пользователя" placeholder="имя пользователя" name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+" data-i18n-aria-label="Имя пользователя" data-i18n-placeholder="имя пользователя">
+        <input aria-label="Пароль" placeholder="пароль" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72" data-i18n-aria-label="Пароль" data-i18n-placeholder="пароль">
+        <button name="action" value="login"><span data-i18n="Войти">Войти</span></button>
+        <button name="action" value="register"><span data-i18n="Регистрация">Регистрация</span></button>
       </form>
-      <div id="account" hidden><span id="account-name"></span> <button id="logout" type="button">Выйти</button></div>
+      <div id="account" hidden><span id="account-name"></span> <button id="logout" type="button"><span data-i18n="Выйти">Выйти</span></button></div>
     </div>
-    <div class="banner"><a class="banner-placeholder" href="/" aria-label="На главную">banner placeholder</a></div>
+    <div class="banner"><a class="banner-placeholder" href="/" aria-label="На главную" data-i18n-aria-label="На главную">banner placeholder</a></div>
 
-    <div class="title">Поиск</div>
+    <div class="title"><span data-i18n="Поиск">Поиск</span></div>
     <form id="search-form" action="/index.html" method="get">
-      <input aria-label="Поиск по форуму" name="q" type="search" required minlength="2" maxlength="200">
-      <button>Искать</button>
+      <input aria-label="Поиск по форуму" name="q" type="search" required minlength="2" maxlength="200" data-i18n-aria-label="Поиск по форуму">
+      <button><span data-i18n="Искать">Искать</span></button>
     </form>
-    <div class="title">Обновления</div>
-    <table class="table news-table"><tbody id="news"><tr><td>Загрузка новостей…</td></tr></tbody></table>
+    <div class="title"><span data-i18n="Обновления">Обновления</span></div>
+    <table class="table news-table"><tbody id="news"><tr><td><span data-i18n="Загрузка новостей…">Загрузка новостей…</span></td></tr></tbody></table>
   </header>
   <p id="notice" role="status" aria-live="polite" hidden></p>
-  <noscript><p>Для форм и локальной хэш-капчи необходим JavaScript. Вычисления выполняются только после нажатия кнопки проверки.</p></noscript>
-  <div class="title" id="page-title">Просмотр темы</div>
+  <noscript><p>Для форм и локальной хэш-капчи необходим JavaScript. Вычисления выполняются только после нажатия кнопки проверки. JavaScript is required for forms and the local hash check.</p></noscript>
+  <div class="title" id="page-title"><span data-i18n="Просмотр темы">Просмотр темы</span></div>
   <table class="main-layout"><tbody><tr>
     <td class="sidebar">
-      <nav class="sidebar-scroll" id="sections" aria-label="Разделы">Загрузка разделов…</nav></td>
+      <nav class="sidebar-scroll" id="sections" aria-label="Разделы" data-i18n-aria-label="Разделы"><span data-i18n="Загрузка разделов…">Загрузка разделов…</span></nav></td>
     <td class="main-content">
       <hr>
       <div class="scroll">
 
-      <p><a id="back-to-section" href="/index.html?view=all">← К списку тем</a></p>
+      <p><a id="back-to-section" href="/index.html?view=all"><span data-i18n="← К списку тем">← К списку тем</span></a></p>
       <div id="thread-settings"></div>
-      <div id="thread" aria-live="polite">Загрузка темы…</div>
-      <nav id="pagination" class="pagination" aria-label="Страницы ответов"></nav>
+      <div id="thread" aria-live="polite"><span data-i18n="Загрузка темы…">Загрузка темы…</span></div>
+      <nav id="pagination" class="pagination" aria-label="Страницы ответов" data-i18n-aria-label="Страницы ответов"></nav>
 
       <section id="composer" hidden>
-        <h2 id="composer-title">Ответить</h2>
+        <h2 id="composer-title"><span data-i18n="Ответить">Ответить</span></h2>
         <form id="post-form" action="/api/threads" method="post" enctype="multipart/form-data">
           <table class="post-table p composer-table"><tbody>
             <tr>
               <td class="composer-body">
                 <div id="topic-fields">
-                  <label>Раздел <select name="section_id" id="section-select" required></select></label>
-                  <input class="heading-tb" aria-label="Заголовок" name="title" placeholder="заголовок" maxlength="200" required>
+                  <label><span data-i18n="Раздел">Раздел</span> <select name="section_id" id="section-select" required></select></label>
+                  <input class="heading-tb" aria-label="Заголовок" name="title" placeholder="заголовок" maxlength="200" required data-i18n-aria-label="Заголовок" data-i18n-placeholder="заголовок">
                 </div>
-                <textarea class="post-tb" aria-label="Текст сообщения" name="body" placeholder="текст" required maxlength="50000"></textarea>
+                <textarea class="post-tb" aria-label="Текст сообщения" name="body" placeholder="текст" required maxlength="50000" data-i18n-aria-label="Текст сообщения" data-i18n-placeholder="текст"></textarea>
               </td>
               <td class="composer-options">
-                <fieldset id="publish-flags" hidden><legend>Размещение</legend>
-                  <label><input name="is_news" type="checkbox">Добавить в новости</label>
-                  <label><input name="is_featured" type="checkbox">Добавить на главную страницу</label>
+                <fieldset id="publish-flags" hidden><legend><span data-i18n="Размещение">Размещение</span></legend>
+                  <label><input name="is_news" type="checkbox"><span data-i18n="Добавить в новости">Добавить в новости</span></label>
+                  <label><input name="is_featured" type="checkbox"><span data-i18n="Добавить на главную страницу">Добавить на главную страницу</span></label>
                 </fieldset>
               </td>
             </tr>
             <tr>
               <td>
-                <div class="dnd" id="drop-zone" tabindex="0" aria-label="Загрузка файлов">
-                  <label>Перетащите или вставьте файлы сюда
+                <div class="dnd" id="drop-zone" tabindex="0" aria-label="Загрузка файлов" data-i18n-aria-label="Загрузка файлов">
+                  <label><span data-i18n="Перетащите или вставьте файлы сюда">Перетащите или вставьте файлы сюда</span>
                     <input id="file-input" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.mp4,.webm,.txt,.pdf,.zip">
                   </label>
-                  <small>До 10 файлов, 5 МиБ каждый, 20 МиБ суммарно.</small>
+                  <small><span data-i18n="До 10 файлов, 5 МиБ каждый, 20 МиБ суммарно.">До 10 файлов, 5 МиБ каждый, 20 МиБ суммарно.</span></small>
                 </div>
                 <ul id="file-list"></ul>
               </td>
-              <td class="composer-options"><button id="post-submit" type="submit" disabled>Запостить</button></td>
+              <td class="composer-options"><button id="post-submit" type="submit" disabled><span data-i18n="Запостить">Запостить</span></button></td>
             </tr>
           </tbody></table>
-          <fieldset class="pow-box"><legend>Turnstile-проверка</legend>
+          <fieldset class="pow-box"><legend><span data-i18n="Turnstile-проверка">Turnstile-проверка</span></legend>
             <p></p>
             <p id="cooldown" role="status"></p>
-            <button id="pow-start" type="button" disabled>Вычислить проверку</button>
-            <button id="pow-cancel" type="button" hidden>Отменить</button>
-            <span id="pow-status" role="status" aria-live="polite">Загрузка условий публикации…</span>
+            <button id="pow-start" type="button" disabled><span data-i18n="Вычислить проверку">Вычислить проверку</span></button>
+            <button id="pow-cancel" type="button" hidden><span data-i18n="Отменить">Отменить</span></button>
+            <span id="pow-status" role="status" aria-live="polite"><span data-i18n="Загрузка условий публикации…">Загрузка условий публикации…</span></span>
           </fieldset>
           <p id="post-result" role="status" aria-live="polite"></p>
         </form>
@@ -96,7 +97,7 @@
     </td>
   </tr></tbody></table>
   <footer>
-    <div class="title">Информация</div>
+    <div class="title"><span data-i18n="Информация">Информация</span></div>
     <table class="footer-table"><tbody><tr>
       <td><hr></td><td>ForBirds Software 1.0</td><td><hr></td>
     </tr></tbody></table>

@@ -7,13 +7,14 @@ const path = require('node:path');
   let options = { headless: true };
   if (process.env.FORBIRDS_SERVERLESS_BROWSER === '1') {
     const packaged = require('@sparticuz/chromium').default;
-    options = { ...options, executablePath: await packaged.executablePath(), args: packaged.args.filter(arg => !arg.includes('disable-web-security') && !arg.includes('allow-running-insecure-content')) };
+    options = { ...options, executablePath: await packaged.executablePath(), args: packaged.args.filter(arg => arg !== '--single-process' && !arg.includes('disable-web-security') && !arg.includes('allow-running-insecure-content')) };
   }
   const browser = await chromium.launch(options);
   const errors = [], externalRequests = [], mediaRequests = [];
   const base = process.env.FORBIRDS_TEST_URL;
   async function page(context) {
     const p = await context.newPage();
+    await p.addInitScript(() => localStorage.setItem('forbirds-language', 'ru'));
     p.on('dialog', dialog => dialog.accept());
     p.on('pageerror', e => errors.push(e.message));
     p.on('request', r => { if (/\/api\/attachments\//.test(r.url())) mediaRequests.push(r.url()); if (!r.url().startsWith(base) && !r.url().startsWith('blob:')) externalRequests.push(r.url()); });
@@ -34,7 +35,70 @@ const path = require('node:path');
     await p.waitForFunction(() => document.querySelector('#pow-status').textContent.includes('Проверка решена'));
     assert.equal(await p.locator('#post-submit').isEnabled(), true);
   }
+  async function languages() {
+    const context = await browser.newContext({ locale: 'en-GB' });
+    const p = await context.newPage();
+    p.on('pageerror', e => errors.push(e.message));
+    await p.goto(base + '/dashboard.html');
+    await p.locator('#language-dialog').waitFor();
+    assert.equal(await p.locator('#language-dialog button').count(), 2);
+    // Browser locale does not silently choose a language; Escape cannot dismiss the choice.
+    await p.keyboard.press('Escape');
+    assert.equal(await p.locator('#language-dialog').isVisible(), true);
+    await p.getByRole('button', { name: 'I speak English', exact: true }).click();
+    await p.waitForFunction(() => document.querySelector('#section-select')?.options.length > 0);
+    assert.equal(await p.locator('html').getAttribute('lang'), 'en');
+    assert.equal(await p.getByRole('button', { name: 'Compute proof', exact: true }).count(), 1);
+    assert.match(await p.locator('#cooldown').textContent(), /45 seconds/);
+    assert.equal(await p.locator('#section-select option').first().textContent(), 'Общий раздел');
+    await p.locator('#auth-form button[value=login]').click();
+    assert.equal(await p.locator('#auth-form [name=username]').evaluate(input => input.validationMessage), 'Please fill out this field.');
+    await p.locator('#auth-form [name=username]').fill('wrongname');
+    await p.locator('#auth-form [name=password]').fill('Incorrect-password-123');
+    await p.locator('#auth-form button[value=login]').click();
+    await p.locator('#notice').filter({ hasText: 'Incorrect username or password.' }).waitFor();
+    // Unsaved text and file selections survive a cancelled language switch.
+    await p.locator('#post-form [name=title]').fill('Ожидает проверки');
+    await p.locator('#post-form [name=body]').fill('Сообщение пользователя без перевода');
+    await p.locator('#file-input').setInputFiles({ name: 'текст.txt', mimeType: 'text/plain', buffer: Buffer.from('sample') });
+    p.once('dialog', dialog => dialog.dismiss());
+    await p.locator('#language-switch').click();
+    assert.equal(await p.locator('#post-form [name=title]').inputValue(), 'Ожидает проверки');
+    assert.match(await p.locator('#file-list').textContent(), /текст.txt/);
+    await p.locator('#pow-start').click();
+    await p.locator('#pow-status').filter({ hasText: 'Proof computed.' }).waitFor();
+    assert.equal(await p.locator('#post-submit').isEnabled(), true);
+    assert.equal(await p.locator('#post-form [name=body]').inputValue(), 'Сообщение пользователя без перевода');
+    // Same page URLs and a saved choice on subsequent navigation.
+    for (const url of ['/', '/post.html?id=99999999', '/profile.html?id=99999999', '/dashboard.html?mode=mine']) {
+      await p.goto(base + url);
+      await p.waitForFunction(() => document.documentElement.lang === 'en');
+      assert.equal(await p.locator('#language-dialog').count(), 0);
+      assert.equal(await p.getByRole('link', { name: 'Home', exact: true }).count(), 1);
+    }
+    await p.locator('#language-switch').click();
+    await p.waitForFunction(() => document.documentElement.lang === 'ru');
+    assert.equal(await p.getByRole('link', { name: 'Главная', exact: true }).count(), 1);
+    await p.locator('#auth-form button[value=login]').click();
+    assert.equal(await p.locator('#auth-form [name=username]').evaluate(input => input.validationMessage), 'Заполните это поле.');
+    await p.reload();
+    await p.locator('#language-switch').waitFor();
+    assert.equal(await p.locator('#language-dialog').count(), 0);
+    // Storage denial does not break startup or the explicit language choice.
+    const blocked = await browser.newContext();
+    const b = await blocked.newPage();
+    b.on('pageerror', e => errors.push(e.message));
+    await b.addInitScript(() => {
+      Storage.prototype.getItem = () => { throw new Error('disabled'); };
+      Storage.prototype.setItem = () => { throw new Error('disabled'); };
+    });
+    await b.goto(base + '/');
+    await b.getByRole('button', { name: 'Я разговариваю по-русски', exact: true }).click();
+    await b.locator('#feed .empty, #feed .post-table').first().waitFor();
+    assert.equal(await b.locator('html').getAttribute('lang'), 'ru');
+  }
   try {
+    await languages();
     const guestContext = await browser.newContext(), adminContext = await browser.newContext(), userContext = await browser.newContext();
     const guest = await page(guestContext), administrator = await page(adminContext), user = await page(userContext);
     await guest.goto(base + '/dashboard.html');
@@ -315,5 +379,5 @@ const path = require('node:path');
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(externalRequests, []);
-  console.log('Browser forms, section management, responsive layout, worker PoW, uploads, feeds, premode and 45s/30s UI: OK');
+  console.log('RU/EN selection, persistence, validation, unsaved changes, browser forms, section management, responsive layout, worker PoW, uploads, feeds, premode and 45s/30s UI: OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

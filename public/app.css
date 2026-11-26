@@ -154,3 +154,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .sub #auth-form { width: 100%; }
   .sub #auth-form input { min-width: 0; width: 120px; }
 }
+
+/* Native modal keeps keyboard focus inside the explicit, bilingual first-visit choice. */
+#language-dialog {
+  max-width: min(32rem, calc(100vw - 3rem));
+  color: inherit;
+  background: #fff;
+  border: 1px solid #777;
+  padding: 1.25rem;
+}
+#language-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+#language-dialog h2 { font-size: 1.1rem; margin: 0 0 1rem; }
+#language-dialog button { margin: .25rem; padding: .5rem; }
+#language-switch { margin: .25rem; }

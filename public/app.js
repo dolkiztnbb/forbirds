@@ -74,7 +74,7 @@ async function loadSections() {
   const side = $('#sections'); side.replaceChildren();
   if (!sections.length) side.append(node('p', 'Разделов пока нет. Администратор может создать первый в панели публикаций.'));
   for (const section of sections) {
-    const details = node('details'); details.open = true;
+    const details = node('details');
     const summary = node('summary'); summary.append(link(section.title + (section.is_archived ? ' [архив]' : ''), '/index.html?section_id=' + section.id));
     details.append(summary, node('p', section.description)); side.append(details);
   }
@@ -137,11 +137,14 @@ function renderPost(item, { title = '', threadLink = true, replyCount } = {}) {
     a.addEventListener('click', event => { event.preventDefault(); profile(item.user_id).catch(notify); });
     if (item.author_banned) { const s = node('s'); s.append(a); name.append(s); } else name.append(a);
   } else name.textContent = username;
-  const avatar = node('img', null, 'avatar'); avatar.src = '/avatars/noavatar.png'; avatar.alt = ''; avatar.width = 64; avatar.height = 64;
+  const avatar = node('img', null, 'avatar'); avatar.src = '/avatars/noavatar.png'; avatar.alt = ''; avatar.width = 100; avatar.height = 100;
   author.append(name, node('div', roleLabels[item.author_role] || 'Гость', 'author-rank'), avatar);
   const header = node('div', null, 'post-header');
-  if (title) header.append(threadLink ? link(title, '/post.html?id=' + item.thread_id) : node('strong', title));
-  header.append(link('№' + item.id, '/post.html?id=' + item.thread_id + '#post-' + item.id));
+  if (title) {
+    const heading = node('b'); heading.append(threadLink ? link(title, '/post.html?id=' + item.thread_id) : node('span', title)); header.append(heading);
+  }
+  const number = link('№' + item.id, '/post.html?id=' + item.thread_id + '#post-' + item.id);
+  number.className = 'post-number'; header.append(number);
   const time = node('time', date(item.created_at)); time.dateTime = item.created_at; header.append(time);
   if (item.status !== 'approved' || staff()) header.append(node('span', labels[item.status], 'post-status'));
   content.append(header, node('hr'), node('div', item.body, 'post-body'));
@@ -176,14 +179,14 @@ function renderPost(item, { title = '', threadLink = true, replyCount } = {}) {
       tools.append(b);
     }
     if (item.user_id && item.user_id !== me.id && item.author_role !== 'admin') tools.append(button('Права / бан автора', () => profile(item.user_id)));
-    content.append(tools);
+    header.append(tools);
   }
   row.append(author, content); tbody.append(row); table.append(tbody); table.id = 'post-' + item.id;
   return table;
 }
 async function loadFeed() {
   const query = pageQuery(), sectionId = params.get('section_id'), search = params.get('q');
-  let title = 'Главная', description = 'Публикации, отмеченные для главной страницы.';
+  let title = 'Главная', description = '';
   if (sectionId) {
     query.set('section_id', sectionId);
     const section = sections.find(s => String(s.id) === sectionId);

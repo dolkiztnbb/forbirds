@@ -35,6 +35,24 @@ const { chromium } = require('playwright-core');
     const guestContext = await browser.newContext(), adminContext = await browser.newContext(), userContext = await browser.newContext();
     const guest = await page(guestContext), administrator = await page(adminContext), user = await page(userContext);
     await guest.goto(base + '/dashboard.html');
+    await guest.waitForFunction(() => document.querySelector('#section-select')?.options.length > 0);
+    const originalLayout = await guest.evaluate(() => ({
+      headerHeight: getComputedStyle(document.querySelector('.sub')).height,
+      bannerWidth: document.querySelector('.banner-placeholder').getBoundingClientRect().width,
+      bannerHeight: document.querySelector('.banner-placeholder').getBoundingClientRect().height,
+      scrollHeight: getComputedStyle(document.querySelector('.main-content > .scroll')).height,
+      textareaHeight: document.querySelector('.post-tb').getBoundingClientRect().height,
+      viewportHeight: innerHeight,
+      composerIsTable: document.querySelector('#post-form > .composer-table')?.tagName === 'TABLE',
+      navigationInSidebar: !!document.querySelector('.sidebar .site-nav'),
+    }));
+    assert.equal(originalLayout.headerHeight, '30px');
+    assert.equal(originalLayout.bannerWidth, 600);
+    assert.equal(originalLayout.bannerHeight, 200);
+    assert.equal(originalLayout.scrollHeight, '640px');
+    assert.ok(Math.abs(originalLayout.textareaHeight - originalLayout.viewportHeight / 2) <= 2);
+    assert.equal(originalLayout.composerIsTable, true);
+    assert.equal(originalLayout.navigationInSidebar, true);
     await guest.locator('#post-form [name=title]').fill('Browser guest topic');
     await guest.locator('#post-form [name=body]').fill('Guest message through a real form');
     await guest.locator('#file-input').setInputFiles({ name: 'browser.txt', mimeType: 'text/plain', buffer: Buffer.from('Browser attachment') });
@@ -72,6 +90,7 @@ const { chromium } = require('playwright-core');
     await user.locator('.post-status').filter({ hasText: 'Ожидает проверки' }).waitFor();
     await user.waitForFunction(() => /(?:30|29|28) сек/.test(document.querySelector('#cooldown').textContent));
     assert.equal(await user.evaluate(() => window.XSS), undefined);
+    assert.equal(await user.locator('.avatar').first().evaluate(img => img.getBoundingClientRect().width), 104);
     const threadUrl = user.url();
     await administrator.goto(base + '/dashboard.html?mode=queue');
     await administrator.getByRole('button', { name: 'Подтвердить', exact: true }).click();

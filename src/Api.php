@@ -85,8 +85,8 @@ final class Api
                 }
                 return $this->publicUser($user, $this->isStaff() || ($this->user && (int) $this->user['id'] === (int) $user['id']));
             }
-            if (preg_match('~^/api/attachments/([1-9][0-9]*)/download$~D', $path, $m)) {
-                $this->download((int) $m[1]);
+            if (preg_match('~^/api/attachments/([1-9][0-9]*)/(download|preview|view)$~D', $path, $m)) {
+                $this->attachment((int) $m[1], $m[2]);
             }
         } else {
             if ($path === '/api/pow/challenge') {
@@ -244,7 +244,9 @@ final class Api
 
     private function listThreads(): array
     {
-        $where = ["p.status = 'approved'"];
+        // Visibility is derived from current server-side permissions, never from a client flag.
+        $statuses = $this->isStaff() ? "('approved','pending')" : "('approved')";
+        $where = ["p.status IN $statuses"];
         $params = [];
         if (isset($_GET['section_id'])) {
             $where[] = 't.section_id = ?';
@@ -264,13 +266,18 @@ final class Api
             }
             $where[] = "(instr(unicode_lower(t.title), unicode_lower(?)) > 0 OR EXISTS (
                 SELECT 1 FROM posts search_post WHERE search_post.thread_id = t.id
-                AND search_post.status = 'approved' AND instr(unicode_lower(search_post.body), unicode_lower(?)) > 0))";
+                AND search_post.status IN $statuses AND instr(unicode_lower(search_post.body), unicode_lower(?)) > 0))";
             array_push($params, $_GET['q'], $_GET['q']);
         }
-        return $this->page("SELECT t.*, p.id AS post_id, p.body, p.user_id, u.username,
-            (SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status = 'approved') AS reply_count
+        $pendingCount = $this->isStaff()
+            ? "(SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status = 'pending')" : '0';
+        $order = $this->isStaff()
+            ? "(p.status = 'pending') DESC, (pending_reply_count > 0) DESC, t.id DESC" : 't.id DESC';
+        return $this->page("SELECT t.*, p.id AS post_id, p.body, p.user_id, p.status, u.username,
+            (SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status IN $statuses) AS reply_count,
+            $pendingCount AS pending_reply_count
             FROM threads t JOIN posts p ON p.thread_id = t.id AND p.is_root = 1
-            LEFT JOIN users u ON u.id = p.user_id WHERE " . implode(' AND ', $where) . ' ORDER BY t.id DESC', $params);
+            LEFT JOIN users u ON u.id = p.user_id WHERE " . implode(' AND ', $where) . ' ORDER BY ' . $order, $params);
     }
 
     private function thread(int $id): array
@@ -353,6 +360,11 @@ final class Api
                     }
                     $moved[] = $destination;
                     chmod($destination, 0600);
+                    if (ImagePreview::isImage($file['mime'])) {
+                        $previews = new ImagePreview($this->config['storage']);
+                        $moved[] = $previews->path($name);
+                        $previews->ensure($destination, $name, $file['mime']);
+                    }
                     $this->run('INSERT INTO attachments(post_id,storage_name,original_name,mime_type,byte_size,spoiler) VALUES (?,?,?,?,?,?)', [
                         $id, $name, $file['name'], $file['mime'], $file['size'], (int) $file['spoiler'],
                     ]);
@@ -362,7 +374,9 @@ final class Api
             });
         } catch (Throwable $e) {
             foreach ($moved as $path) {
-                unlink($path);
+                if (is_file($path)) {
+                    unlink($path);
+                }
             }
             throw $e;
         }
@@ -482,7 +496,11 @@ final class Api
         unset($post['moderated_by']);
         $post['attachments'] = $this->all('SELECT id, original_name, mime_type, byte_size, spoiler FROM attachments WHERE post_id = ? ORDER BY id', [$post['id']]);
         foreach ($post['attachments'] as &$file) {
-            $file['download_url'] = '/api/attachments/' . $file['id'] . '/download';
+            $base = '/api/attachments/' . $file['id'];
+            $file['download_url'] = $base . '/download';
+            $file['is_image'] = ImagePreview::isImage($file['mime_type']);
+            $file['view_url'] = $file['is_image'] ? $base . '/view' : null;
+            $file['preview_url'] = $file['is_image'] ? $base . '/preview' : null;
         }
         return $post;
     }
@@ -557,7 +575,7 @@ final class Api
         return $files;
     }
 
-    private function download(int $id): never
+    private function attachment(int $id, string $variant): never
     {
         $file = $this->one('SELECT * FROM attachments WHERE id = ?', [$id]);
         if (!$file) {
@@ -568,10 +586,28 @@ final class Api
         if (!is_file($path)) {
             $this->notFound();
         }
+        if ($variant !== 'download' && !ImagePreview::isImage($file['mime_type'])) {
+            $this->notFound();
+        }
         session_write_close();
-        header('Content-Type: application/octet-stream');
-        header('Content-Length: ' . $file['byte_size']);
-        header("Content-Disposition: attachment; filename=\"download\"; filename*=UTF-8''" . rawurlencode($file['original_name']));
+        $mime = 'application/octet-stream';
+        $disposition = 'attachment';
+        $name = $file['original_name'];
+        if ($variant === 'preview') {
+            $path = (new ImagePreview($this->config['storage']))->ensure($path, $file['storage_name'], $file['mime_type']);
+            $mime = 'image/jpeg';
+            $disposition = 'inline';
+            $name = 'preview.jpg';
+        } elseif ($variant === 'view') {
+            $mime = $file['mime_type'];
+            $disposition = 'inline';
+        }
+        if ($variant !== 'download') {
+            header("Content-Security-Policy: default-src 'none'; img-src 'self'; frame-ancestors 'none'");
+        }
+        header('Content-Type: ' . $mime);
+        header('Content-Length: ' . filesize($path));
+        header("Content-Disposition: $disposition; filename=\"image\"; filename*=UTF-8''" . rawurlencode($name));
         readfile($path);
         exit;
     }

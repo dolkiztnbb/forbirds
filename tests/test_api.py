@@ -7,6 +7,8 @@ import http.cookiejar
 import hashlib
 import concurrent.futures
 import re
+import struct
+import zlib
 import json
 import os
 from pathlib import Path
@@ -112,13 +114,32 @@ class ApiTests(unittest.TestCase):
                                     input=stdin, text=True, capture_output=True, timeout=30)
             if result.returncode:
                 raise RuntimeError(result.stdout + result.stderr)
+        cls.fixtures = cls.storage / 'fixtures'
+        cls.fixtures.mkdir()
+        fixture_code = r'''$dir = getenv('FORBIRDS_STORAGE') . '/fixtures/';
+            $im = imagecreatetruecolor(512,128);
+            imagefill($im,0,0,imagecolorallocate($im,80,150,220));
+            imagepng($im,$dir.'wide.png'); imagejpeg($im,$dir.'wide.jpg');
+            imagegif($im,$dir.'wide.gif'); imagewebp($im,$dir.'wide.webp');
+            $im = imagecreatetruecolor(80,640); imagepng($im,$dir.'portrait.png');
+            $im = imagecreatetruecolor(32,16); imagepng($im,$dir.'small.png');'''
+        result = subprocess.run(cls.php + ['-r', fixture_code], cwd=ROOT, env=cls.env,
+                                text=True, capture_output=True, timeout=30)
+        if result.returncode:
+            raise RuntimeError(result.stdout + result.stderr)
+        gif = (cls.fixtures / 'wide.gif').read_bytes()
+        table_end = 13 + (3 * (2 ** ((gif[10] & 7) + 1)) if gif[10] & 128 else 0)
+        frame = gif[table_end:-1]
+        delay = b'\x21\xf9\x04\x00\x0a\x00\x00\x00'
+        animation = b'GIF89a' + gif[6:table_end] + b'\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00' + delay + frame + delay + frame + b'\x3b'
+        (cls.fixtures / 'animated.gif').write_bytes(animation)
         with socket.socket() as sock:
             sock.bind(('0.0.0.0', 0))
             cls.port = sock.getsockname()[1]
         cls.base = f'http://127.0.0.1:{cls.port}'
         cls.log = open(cls.storage / 'server.log', 'w+')
         cls.server = subprocess.Popen(cls.php + [
-            '-d', 'upload_max_filesize=5M', '-d', 'post_max_size=21M',
+            '-d', 'memory_limit=128M', '-d', 'upload_max_filesize=5M', '-d', 'post_max_size=21M',
             '-d', 'max_file_uploads=20', '-S', f'0.0.0.0:{cls.port}',
             '-t', 'public', 'public/router.php',
         ], cwd=ROOT, env=cls.env, stdout=cls.log, stderr=cls.log, start_new_session=True)
@@ -208,6 +229,70 @@ class ApiTests(unittest.TestCase):
         self.moderate(pending['post_id'])
         self.ok(self.guest.get(f'/api/threads/{pending["thread_id"]}'))
         self.assertEqual(len(self.ok(self.guest.get('/api/threads?q=hidden-unique-content'))['items']), 1)
+
+    def test_staff_lists_pending_topics_without_a_moderation_page(self):
+        pending = self.topic(self.normal, body='staff-only-search-content')
+        tid = pending['thread_id']
+        for client in [self.admin, self.mod]:
+            for query in ['', '?section_id=' + str(self.section), '?q=staff-only-search-content']:
+                items = self.ok(client.get('/api/threads' + query))['items']
+                self.assertEqual([(p['id'], p['status']) for p in items], [(tid, 'pending')])
+            self.assertEqual(self.ok(client.get('/api/threads?featured=1'))['items'], [])
+        for client in [self.guest, self.normal, self.trusted]:
+            for query in ['', '?section_id=' + str(self.section), '?q=staff-only-search-content', '?include_pending=1']:
+                self.assertEqual(self.ok(client.get('/api/threads' + query))['items'], [])
+        self.ok(self.admin.post(f'/api/threads/{tid}/settings', {'is_news': True, 'is_featured': True}))
+        for client in [self.admin, self.mod]:
+            self.assertEqual(self.ok(client.get('/api/threads?news=1&featured=1'))['items'][0]['status'], 'pending')
+        self.assertEqual(self.ok(self.guest.get('/api/threads?news=1'))['items'], [])
+        self.moderate(pending['post_id'], 'reject')
+        self.assertEqual(self.ok(self.admin.get('/api/threads'))['items'], [])
+        self.moderate(pending['post_id'], 'delete')
+        self.assertEqual(self.ok(self.mod.get('/api/threads'))['items'], [])
+
+    def test_staff_search_and_counts_include_pending_replies_without_public_leaks(self):
+        topic = self.topic()
+        tid = topic['thread_id']
+        pending = self.ok(self.normal.post(f'/api/threads/{tid}/replies', {'body': 'private-reply-search'}), 201)
+        for client in [self.admin, self.mod]:
+            item = self.ok(client.get('/api/threads?q=private-reply-search'))['items'][0]
+            self.assertEqual(item['reply_count'], 1)
+            self.assertEqual(item['pending_reply_count'], 1)
+            replies = self.ok(client.get(f'/api/threads/{tid}'))['replies']['items']
+            self.assertEqual([(p['id'], p['status']) for p in replies], [(pending['post_id'], 'pending')])
+        for client in [self.guest, self.trusted]:
+            self.assertEqual(self.ok(client.get('/api/threads?q=private-reply-search'))['items'], [])
+            item = self.ok(client.get('/api/threads'))['items'][0]
+            self.assertEqual(item['reply_count'], 0)
+            self.assertEqual(item['pending_reply_count'], 0)
+            self.assertEqual(self.ok(client.get(f'/api/threads/{tid}'))['replies']['items'], [])
+        self.moderate(pending['post_id'])
+        item = self.ok(self.guest.get('/api/threads?q=private-reply-search'))['items'][0]
+        self.assertEqual(item['reply_count'], 1)
+        self.assertEqual(item['pending_reply_count'], 0)
+
+    def test_staff_prioritizes_pending_topics_and_topics_with_pending_replies(self):
+        old = self.topic()
+        self.ok(self.normal.post(f'/api/threads/{old["thread_id"]}/replies', {'body': 'Review this reply'}), 201)
+        newer = self.topic()
+        pending = self.topic(self.guest)
+        for client in [self.admin, self.mod]:
+            items = self.ok(client.get('/api/threads'))['items']
+            self.assertEqual([p['id'] for p in items], [pending['thread_id'], old['thread_id'], newer['thread_id']])
+            self.assertEqual(self.ok(client.get('/api/threads?limit=1'))['items'][0]['status'], 'pending')
+        items = self.ok(self.guest.get('/api/threads'))['items']
+        self.assertEqual([p['id'] for p in items], [newer['thread_id'], old['thread_id']])
+
+    def test_staff_feed_permissions_are_revoked_for_existing_sessions(self):
+        self.topic(self.normal)
+        self.assertEqual(len(self.ok(self.mod.get('/api/threads'))['items']), 1)
+        uid = self.ids['moderator']
+        self.ok(self.admin.post(f'/api/users/{uid}/role', {'role': 'user'}))
+        self.assertEqual(self.ok(self.mod.get('/api/threads'))['items'], [])
+        self.ok(self.admin.post(f'/api/users/{uid}/role', {'role': 'moderator'}))
+        self.assertEqual(len(self.ok(self.mod.get('/api/threads'))['items']), 1)
+        self.ok(self.admin.post(f'/api/users/{uid}/ban', {'enabled': True}))
+        self.assertEqual(self.ok(self.mod.get('/api/threads'))['items'], [])
 
     def test_anonymous_and_staff_publication(self):
         guest = self.topic(self.guest)
@@ -313,6 +398,114 @@ class ApiTests(unittest.TestCase):
         self.moderate(pending['post_id'], 'unapprove')
         self.ok(self.guest.get(url), 404)
         self.ok(self.guest.get(reply_file), 404)
+
+    @staticmethod
+    def jpeg_dimensions(data):
+        assert data[:2] == b'\xff\xd8'
+        pos = 2
+        while pos < len(data):
+            assert data[pos] == 255
+            marker = data[pos + 1]
+            pos += 2
+            size = int.from_bytes(data[pos:pos + 2], 'big')
+            if marker in (0xc0, 0xc1, 0xc2):
+                height, width = struct.unpack('>HH', data[pos + 3:pos + 7])
+                return width, height
+            pos += size
+        raise AssertionError('No JPEG dimensions')
+
+    def image_post(self, filename='wide.png', client=None, spoiler=False):
+        fields = {'section_id': self.section, 'title': 'Image', 'body': 'Preview test'}
+        if spoiler:
+            fields['spoilers[]'] = '0'
+        client = client or self.normal
+        result = self.ok(client.upload('/api/threads', fields, [
+            (filename, (self.fixtures / filename).read_bytes()),
+        ]), 201)
+        image = self.ok(client.get(f'/api/posts/{result["post_id"]}'))['attachments'][0]
+        return result, image
+
+    def test_image_previews_and_inline_originals_for_all_supported_formats(self):
+        for filename in ['wide.png', 'wide.gif', 'animated.gif', 'wide.jpg', 'wide.webp', 'portrait.png', 'small.png']:
+            with self.subTest(filename=filename):
+                result, image = self.image_post(filename)
+                self.assertTrue(image['is_image'])
+                self.assertNotIn('storage_name', image)
+                for endpoint in ['preview_url', 'view_url', 'download_url']:
+                    self.ok(self.guest.get(image[endpoint]), 404)
+                response = self.normal.get(image['preview_url'])
+                jpeg = self.ok(response)
+                self.assertEqual(response[2]['Content-Type'], 'image/jpeg')
+                expected = (32, 256) if filename == 'portrait.png' else (32, 16) if filename == 'small.png' else (256, 64)
+                self.assertEqual(self.jpeg_dimensions(jpeg), expected)
+                self.assertIn('inline;', response[2]['Content-Disposition'])
+                self.assertIn('no-store', response[2]['Cache-Control'])
+                original = self.normal.get(image['view_url'])
+                self.assertEqual(self.ok(original), (self.fixtures / filename).read_bytes())
+                self.assertTrue(original[2]['Content-Type'].startswith('image/'))
+                self.assertEqual(original[2]['X-Content-Type-Options'], 'nosniff')
+                self.moderate(result['post_id'])
+                self.ok(self.guest.get(image['preview_url']))
+                self.ok(self.guest.get(image['view_url']))
+                self.assertIn('attachment;', self.guest.get(image['download_url'])[2]['Content-Disposition'])
+
+    def test_image_previews_revoke_access_with_parent_and_deleted_posts(self):
+        topic, image = self.image_post(spoiler=True)
+        self.assertEqual(image['spoiler'], 1)
+        self.moderate(topic['post_id'])
+        reply = self.ok(self.mod.upload(f'/api/threads/{topic["thread_id"]}/replies', {'body': 'Image reply'}, [
+            ('wide.gif', (self.fixtures / 'wide.gif').read_bytes()),
+        ]), 201)
+        reply_image = self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['attachments'][0]
+        self.moderate(topic['post_id'], 'unapprove')
+        for attachment in [image, reply_image]:
+            for endpoint in ['preview_url', 'view_url', 'download_url']:
+                self.ok(self.guest.get(attachment[endpoint]), 404)
+        self.moderate(topic['post_id'])
+        self.moderate(reply['post_id'], 'delete')
+        self.ok(self.guest.get(reply_image['preview_url']), 404)
+        self.ok(self.guest.get(reply_image['view_url']), 404)
+
+    def test_existing_images_regenerate_missing_previews_privately(self):
+        _, image = self.image_post()
+        # Simulate an upload made before thumbnail support (the derived preview is absent).
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            name = db.execute('SELECT storage_name FROM attachments WHERE id = ?', (image['id'],)).fetchone()[0]
+        db.close()
+        cached_path = self.storage / 'previews' / (name + '.jpg')
+        cached_path.unlink()
+        preview = self.ok(self.normal.get(image['preview_url']))
+        self.assertEqual(self.jpeg_dimensions(preview), (256, 64))
+        self.assertEqual(cached_path.read_bytes(), preview)
+        self.ok(self.guest.get('/storage/previews/' + cached_path.name), 404)
+
+    def test_nonimages_cannot_be_embedded(self):
+        topic = self.ok(self.normal.upload('/api/threads', {
+            'section_id': self.section, 'title': 'Text', 'body': 'File',
+        }, [('file.txt', b'Plain text attachment')]), 201)
+        attachment = self.ok(self.normal.get(f'/api/posts/{topic["post_id"]}'))['attachments'][0]
+        self.assertFalse(attachment['is_image'])
+        self.assertIsNone(attachment['view_url'])
+        self.assertIsNone(attachment['preview_url'])
+        self.ok(self.normal.get(f'/api/attachments/{attachment["id"]}/view'), 404)
+        self.ok(self.normal.get(f'/api/attachments/{attachment["id"]}/preview'), 404)
+        self.assertEqual(self.normal.get(attachment['download_url'])[2]['Content-Type'], 'application/octet-stream')
+
+    @staticmethod
+    def png_header(width, height):
+        def chunk(kind, data):
+            return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+        return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)) + chunk(b'IEND', b'')
+
+    def test_image_decode_failure_rolls_back_post_files_and_cooldown(self):
+        before = set((self.storage / 'uploads').iterdir())
+        fields = {'section_id': self.section, 'title': 'Broken', 'body': 'Image'}
+        self.ok(self.normal.upload('/api/threads', fields, [('broken.png', self.png_header(16, 16))]), 422)
+        self.assertEqual(before, set((self.storage / 'uploads').iterdir()))
+        self.assertEqual(self.ok(self.normal.get('/api/posting-status'))['retry_after'], 0)
+        self.assertEqual(self.ok(self.normal.get('/api/me/posts'))['items'], [])
+        self.ok(self.normal.upload('/api/threads', fields, [('huge.png', self.png_header(12000, 3000))]), 413)
+        self.assertEqual(before, set((self.storage / 'uploads').iterdir()))
 
     def test_upload_validation_and_transaction_rollback(self):
         fields = {'section_id': self.section, 'title': 'bad', 'body': 'bad'}
@@ -507,7 +700,7 @@ class ApiTests(unittest.TestCase):
     def test_browser_forms_pow_and_moderation(self):
         result = subprocess.run(['node', 'tests/test_browser.cjs'], cwd=ROOT,
                                 env={**os.environ, 'FORBIRDS_TEST_URL': self.base,
-                                     'FORBIRDS_TEST_PASSWORD': PASSWORD}, text=True,
+                                     'FORBIRDS_TEST_PASSWORD': PASSWORD, 'FORBIRDS_TEST_FIXTURES': str(self.fixtures)}, text=True,
                                 capture_output=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

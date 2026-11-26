@@ -8,7 +8,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .sub input { width: 170px; }
 .banner { text-align: center; }
 /* The original referenced a missing banner.png. Keep its 600×200 slot without a broken image request. */
-.banner-placeholder { display: inline-block; width: 600px; max-width: 100%; height: 200px; box-sizing: border-box; text-align: left; vertical-align: top; color: inherit; text-decoration: none; }
+.banner-placeholder {
+    display: inline-block; width: 600px; max-width: 100%; height: 200px; box-sizing: border-box; text-align: left; vertical-align: top; color: inherit; text-decoration: none; 
+    background-image: url("/static/banner.png");
+}
 .site-nav { padding: 5px 0; font-size: 12px; }
 .dashboard-nav { margin-bottom: 5px; font-size: 12px; }
 .sidebar { padding: 5px; }
@@ -88,7 +91,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .sidebar-scroll { height: auto; max-height: 200px; }
   .site-nav { font-size: 14px; }
   .scroll { height: auto; max-height: none; padding-right: 0; }
-  .banner-placeholder { height: 200px; }
+  .banner-placeholder {
+    height: 200px; 
+  }
   td.post-author { width: 100px; }
   .avatar { width: 80px; height: 80px; }
   .mod-tools { float: none; }

@@ -18,7 +18,8 @@ const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toStr
   for (const page of ['index', 'post', 'dashboard', 'profile']) {
     const html = fs.readFileSync(`public/${page}.html`, 'utf8');
     for (const match of html.matchAll(/data-i18n(?:-[\w-]+)?="([^"]*)"/g)) {
-      assert.ok(Object.hasOwn(english, match[1]), `Missing HTML key: ${match[1]}`);
+      const key = match[1].replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+      assert.ok(Object.hasOwn(english, key), `Missing HTML key: ${key}`);
     }
     assert.match(html, /id="language-switch"/);
   }

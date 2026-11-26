@@ -191,3 +191,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 #profile-locks { color: #7a4b00; font-size: 12px; }
 
 .profile-posts-table tr[data-restricted="1"] { background: #fff3a8; opacity: .65; }
+
+.audio-box { box-sizing: border-box; display: inline-block; vertical-align: top; width: 340px; max-width: 100%; padding: 5px; margin: 2px; border: 1px solid #888; background: #d5d8d8; overflow-wrap: anywhere; }
+.attachment-audio { display: block; width: 100%; margin: 5px 0; }
+.audio-help { font-size: 12px; }
+.post-body .quote-green { color: #397b28; }
+.post-body .quote-orange { color: #b65300; }
+.post-body .quote-blue { color: #1682b1; }
+
+.quote-help { display: block; overflow-wrap: anywhere; }

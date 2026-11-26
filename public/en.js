@@ -257,5 +257,10 @@ export default {
   "Разблокировать пост": "Unblock post",
   "Заблокировать пост": "Block post",
   "Скрытые и заблокированные посты": "Hidden and blocked posts",
-  "Запреты описаний": "Description bans"
+  "Запреты описаний": "Description bans",
+  "Аудио: ": "Audio: ",
+  "Аудио под спойлером: ": "Spoiler audio: ",
+  "Скачать аудио: ": "Download audio: ",
+  "Если браузер не поддерживает формат аудио, скачайте оригинал.": "If your browser does not support this audio format, download the original.",
+  "Цитаты в начале строки: > зелёная, < оранжевая, ^ голубая.": "Quotes at the start of a line: > green, < orange, ^ light blue."
 };

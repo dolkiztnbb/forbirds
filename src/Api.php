@@ -726,8 +726,9 @@ final class Api
             $base = '/api/attachments/' . $file['id'];
             $file['download_url'] = $available ? $base . '/download' : null;
             $file['is_image'] = ImagePreview::isImage($file['mime_type']);
-            $file['is_video'] = MediaFile::isVideo($file['mime_type']);
-            $file['view_url'] = $available && ($file['is_image'] || $file['is_video']) ? $base . '/view' : null;
+            $file['is_audio'] = MediaFile::isAudio($file['mime_type'], $file['original_name']);
+            $file['is_video'] = !$file['is_audio'] && MediaFile::isVideo($file['mime_type']);
+            $file['view_url'] = $available && ($file['is_image'] || $file['is_video'] || $file['is_audio']) ? $base . '/view' : null;
             $file['preview_url'] = $available && $file['is_image'] ? $base . '/preview' : null;
             $post['attachments'][] = $file;
         }
@@ -763,6 +764,9 @@ final class Api
             'application/zip' => ['zip'], 'application/x-zip' => ['zip'],
             'video/mp4' => ['mp4'], 'video/webm' => ['webm'],
         ];
+        foreach (MediaFile::AUDIO_TYPES as $mime => $extensions) {
+            $allowed[$mime] = array_merge($allowed[$mime] ?? [], $extensions);
+        }
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         foreach ($input['name'] as $i => $name) {
             $error = $input['error'][$i] ?? UPLOAD_ERR_NO_FILE;
@@ -819,7 +823,7 @@ final class Api
             $this->notFound();
         }
         if (($variant === 'preview' && !ImagePreview::isImage($file['mime_type']))
-            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']))) {
+            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']) && !MediaFile::isAudio($file['mime_type'], $file['original_name']))) {
             $this->notFound();
         }
         session_write_close();
@@ -832,7 +836,7 @@ final class Api
             $disposition = 'inline';
             $name = 'preview.jpg';
         } elseif ($variant === 'view') {
-            $mime = $file['mime_type'];
+            $mime = MediaFile::playbackMime($file['mime_type'], $file['original_name']);
             $disposition = 'inline';
         }
         if ($variant !== 'download') {

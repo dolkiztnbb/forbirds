@@ -195,6 +195,27 @@ function videoPlayer(file) {
   video.addEventListener('error', () => { fallback.hidden = false; });
   const player = node('div'); player.append(video, fallback); return player;
 }
+function audioPlayer(file) {
+  const audio = node('audio', null, 'attachment-audio');
+  audio.controls = true; audio.preload = 'none';
+  audio.setAttribute('aria-label', t('Аудио: ') + file.original_name);
+  audio.src = file.view_url;
+  const fallback = node('p', t('Если браузер не поддерживает формат аудио, скачайте оригинал.'), 'audio-help');
+  fallback.hidden = true;
+  audio.addEventListener('error', () => { fallback.hidden = false; });
+  const player = node('div'); player.append(audio, fallback); return player;
+}
+function postBody(text) {
+  const body = node('div', null, 'post-body');
+  // textContent, not HTML: quote prefixes never enable markup or scripts.
+  const lines = text.split(/\r\n|\r|\n/);
+  lines.forEach((line, index) => {
+    if (index) body.append(document.createTextNode('\n'));
+    const color = { '>': 'green', '<': 'orange', '^': 'blue' }[line[0]];
+    body.append(color ? node('span', line, 'quote-' + color) : document.createTextNode(line));
+  });
+  return body;
+}
 function flagBadge(flag) {
   const badge = node('span', null, 'user-flag');
   const image = node('img'); image.src = flag.url; image.alt = ''; image.title = flag.label;
@@ -228,11 +249,11 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   if (item.is_hidden) header.append(node('span', t('Пост скрыт'), 'post-status'));
   if (item.is_blocked) header.append(node('span', t('Пост заблокирован'), 'post-status'));
   if (staff()) header.append(moderation.postControls(item));
-  content.append(header, node('hr'), node('div', item.body, 'post-body'));
+  content.append(header, node('hr'), postBody(item.body));
   if (item.attachments?.length) {
     const files = node('div', null, 'attachments');
     for (const file of item.attachments) {
-      const box = node('div', null, (file.is_image ? 'image-box' : file.is_video ? 'video-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
+      const box = node('div', null, (file.is_image ? 'image-box' : file.is_video ? 'video-box' : file.is_audio ? 'audio-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
       if (staff()) box.append(moderation.fileTools(file));
       if (!file.download_url) {
         box.append(node('p', file.original_name + ' · ' + (file.blocked ? t('Файл заблокирован') : file.moderation_state === 'deleted' ? t('Файл удалён') : t('Файл скрыт'))));
@@ -252,6 +273,17 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
         image.loading = 'lazy';
         open.append(image); box.append(open, node('div', file.original_name));
         box.append(link(t("Скачать полноразмерную картинку"), file.download_url));
+      } else if (file.is_audio) {
+        if (file.spoiler) {
+          const details = node('details'), summary = node('summary', t('Аудио под спойлером: ') + file.original_name);
+          details.append(summary);
+          details.addEventListener('toggle', () => {
+            if (details.open && !details.querySelector('audio')) details.append(audioPlayer(file));
+            if (!details.open) details.querySelector('audio')?.pause();
+          });
+          box.append(details);
+        } else box.append(node('div', file.original_name), audioPlayer(file));
+        box.append(link(t('Скачать аудио: ') + file.original_name, file.download_url));
       } else if (file.is_video) {
         if (file.spoiler) {
           const details = node('details'), summary = node('summary', t("Видео под спойлером: ") + file.original_name);

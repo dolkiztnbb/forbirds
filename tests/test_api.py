@@ -146,7 +146,7 @@ class ApiTests(unittest.TestCase):
         delay = b'\x21\xf9\x04\x00\x0a\x00\x00\x00'
         animation = b'GIF89a' + gif[6:table_end] + b'\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00' + delay + frame + delay + frame + b'\x3b'
         (cls.fixtures / 'animated.gif').write_bytes(animation)
-        for filename in ['sample.mp4', 'sample.webm']:
+        for filename in [p.name for p in (ROOT / 'tests/fixtures').glob('sample.*')]:
             (cls.fixtures / filename).write_bytes((ROOT / 'tests' / 'fixtures' / filename).read_bytes())
         with socket.socket() as sock:
             sock.bind(('0.0.0.0', 0))
@@ -204,7 +204,7 @@ class ApiTests(unittest.TestCase):
         with sqlite3.connect(self.storage / 'forum.sqlite') as db:
             for table in ['description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
                 db.execute(f'DELETE FROM {table}')
-            db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL")
+            db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL, avatar_locked = 0, description_locked = 0")
             db.execute("UPDATE users SET role = 'user', auto_approve = 0, is_banned = 0 WHERE role != 'admin'")
             db.execute("UPDATE users SET role = 'moderator' WHERE username = 'moderator'")
         db.close()
@@ -619,6 +619,81 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(self.ok(self.guest.get('/api/threads?limit=1&page=2'))['items']), 1)
         self.ok(self.guest.get('/api/threads?page=0'), 422)
         self.ok(self.guest.get('/api/threads?section_id=1%20OR%201=1'), 422)
+
+    def test_audio_formats_inline_mime_and_bytes(self):
+        formats = {'mp3': 'audio/mpeg', 'mp2': 'audio/mpeg', 'flac': 'audio/flac',
+                   'wav': 'audio/wav', 'ogg': 'audio/ogg', 'opus': 'audio/ogg',
+                   'm4a': 'audio/mp4', 'aac': 'audio/aac', 'aiff': 'audio/x-aiff',
+                   'wma': 'audio/x-ms-wma', 'weba': 'audio/webm'}
+        entries = list(formats.items())
+        for batch in [entries[:6], entries[6:]]:
+            result = self.ok(self.admin.upload('/api/threads', {
+                'section_id': self.section, 'title': 'Audio formats', 'body': 'Audio',
+            }, [('sample.' + ext, (self.fixtures / ('sample.' + ext)).read_bytes()) for ext, _ in batch]), 201)
+            files = self.ok(self.guest.get(f'/api/posts/{result["post_id"]}'))['attachments']
+            self.assertEqual(len(files), len(batch))
+            for audio, (ext, mime) in zip(files, batch):
+                with self.subTest(ext=ext):
+                    self.assertTrue(audio['is_audio'])
+                    self.assertFalse(audio['is_video'])
+                    self.assertFalse(audio['is_image'])
+                    self.assertIsNone(audio['preview_url'])
+                    data = (self.fixtures / ('sample.' + ext)).read_bytes()
+                    response = self.guest.get(audio['view_url'])
+                    self.assertEqual(self.ok(response), data)
+                    self.assertEqual(response[2]['Content-Type'], mime)
+                    self.assertIn('inline;', response[2]['Content-Disposition'])
+                    self.assertIn('no-store', response[2]['Cache-Control'])
+                    self.assertEqual(self.ok(self.guest.request('GET', audio['view_url'], headers={'Range': 'bytes=0-15'}), 206), data[:16])
+                    download = self.guest.get(audio['download_url'])
+                    self.assertEqual(self.ok(download), data)
+                    self.assertEqual(download[2]['Content-Type'], 'application/octet-stream')
+                    self.ok(self.guest.get(f'/api/attachments/{audio["id"]}/preview'), 404)
+
+    def test_audio_visibility_ranges_moderation_and_quote_plain_text(self):
+        body = '> green\n< orange\n^ blue\n<script>window.XSS=true</script>\nplain > not a quote\n\nend'
+        data = (self.fixtures / 'sample.wav').read_bytes()
+        root = self.ok(self.normal.upload('/api/threads', {
+            'section_id': self.section, 'title': 'Audio protection', 'body': body, 'spoilers[]': '0',
+        }, [('sample.wav', data)]), 201)
+        post = self.ok(self.normal.get(f'/api/posts/{root["post_id"]}'))
+        self.assertEqual(post['body'], body)
+        audio = post['attachments'][0]
+        self.assertEqual(audio['spoiler'], 1)
+        url = audio['view_url']
+        for method, headers in [('GET', {}), ('HEAD', {}), ('GET', {'Range': 'bytes=0-15'})]:
+            self.ok(self.guest.request(method, url, headers=headers), 404)
+        self.moderate(root['post_id'])
+        head = self.guest.request('HEAD', url)
+        self.assertEqual(self.ok(head), b'')
+        self.assertEqual(int(head[2]['Content-Length']), len(data))
+        self.assertEqual(self.ok(self.guest.request('GET', url, headers={'Range': 'bytes=-12'}), 206), data[-12:])
+        self.ok(self.guest.request('GET', url, headers={'Range': 'bytes=99999999-'}), 416)
+        for action in ['hide', 'block']:
+            self.ok(self.mod.post(f'/api/posts/{root["post_id"]}/restrict', {'action': action, 'reason': 'Audio restriction'}))
+            self.ok(self.normal.request('GET', url, headers={'Range': 'bytes=0-15'}), 404)
+            self.ok(self.guest.request('HEAD', url), 404)
+            self.ok(self.mod.get(url))
+            self.ok(self.mod.post(f'/api/posts/{root["post_id"]}/restrict', {'action': 'un' + action if action == 'block' else 'unhide', 'reason': 'Restore'}))
+        reply = self.ok(self.admin.upload(f'/api/threads/{root["thread_id"]}/replies', {'body': 'Audio reply'}, [('sample.wav', data)]), 201)
+        reply_audio = self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['attachments'][0]
+        self.moderate(root['post_id'], 'unapprove')
+        self.ok(self.guest.get(reply_audio['view_url']), 404)
+        self.moderate(root['post_id'])
+        self.ok(self.mod.post(f'/api/attachments/{audio["id"]}/moderate', {'action': 'hide', 'reason': 'Audio file hidden'}))
+        self.ok(self.mod.get(url), 404)
+        self.ok(self.mod.post(f'/api/attachments/{reply_audio["id"]}/moderate', {'action': 'hashban', 'reason': 'Audio file banned'}))
+        self.ok(self.admin.get(reply_audio['view_url']), 404)
+        self.ok(self.normal.upload('/api/threads', {'section_id': self.section, 'title': 'Banned audio', 'body': 'no'}, [('renamed.wav', data)]), 422)
+
+    def test_audio_rejects_fake_content_and_mismatched_extensions(self):
+        fields = {'section_id': self.section, 'title': 'Fake audio', 'body': 'bad'}
+        for name, data in [('fake.mp3', b'<html>not music</html>'),
+                           ('fake.wav', (self.fixtures / 'wide.png').read_bytes()),
+                           ('fake.flac', (self.fixtures / 'sample.mp3').read_bytes()),
+                           ('fake.ogg', b'not an ogg container'),
+                           ('fake.html', (self.fixtures / 'sample.mp3').read_bytes())]:
+            self.ok(self.normal.upload('/api/threads', fields, [(name, data)]), 422)
 
     def video_post(self, filename='sample.webm', client=None):
         client = client or self.normal

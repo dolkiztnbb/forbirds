@@ -1,0 +1,254 @@
+body {
+    font-family: Verdana, Geneva, Tahoma, sans-serif;
+    margin: 0; /* Убираем стандартные отступы браузера */
+}
+.title {
+    width: 100%;
+    height: 25px;
+    background: linear-gradient(180deg, #0066ff, #375786);
+    color: #fff;
+    padding-left: 5px;
+    box-sizing: border-box;
+}
+.sub {
+    width: 100%;
+    height: 30px;
+    background: linear-gradient(180deg, #e9eaeb, #868787);
+    color: #fff;
+    padding-left: 5px;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+/* 1. Фиксируем раскладку таблицы, чтобы она строго слушалась ширины колонок */
+table.main-layout {
+    width: 100%;
+    height: calc(75vh); /* Ровно под высоту экрана за вычетом шапки */
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+.sidebar {
+    background: linear-gradient(180deg, #b6b7b8, #868787);
+    color: #fff;
+    width: 200px;
+    margin: 0;
+    border: 0;
+    font-weight: normal;
+    vertical-align: top;
+}
+
+/* 2. Блок внутри ячейки, который будет скроллиться */
+.sidebar-scroll {
+    height: 100%;
+    max-height: calc(100vh - 85px); /* Высота экрана минус шапка (25px) и футер (60px) */
+    overflow-y: auto;               /* Вертикальный скролл при открытии */
+    overflow-x: hidden;             /* Запрет растягивания по горизонтали */
+    overflow-wrap: anywhere;        /* Принудительный перенос длинных слов */
+    box-sizing: border-box;
+    padding-right: 5px;
+}
+.scroll {
+    overflow-y: auto;               /* Вертикальный скролл при открытии */
+    overflow-x: hidden;             /* Запрет растягивания по горизонтали */
+    overflow-wrap: anywhere;        /* Принудительный перенос длинных слов */
+    box-sizing: border-box;
+    padding-right: 5px;
+    height: 640px;
+}
+.table th {
+    border: 1px solid #333; /* Sets width, style, and color */
+    background-color: #e6e2e2;
+}
+.table {
+    background-color: #ccc;
+    width:100%;
+}
+
+th {
+    vertical-align: top;
+    margin: 0;
+    padding: 5px;
+    border: 0;
+    text-align: left;   
+    font-weight: normal;
+}
+ul {
+    padding-left: 15px;
+    margin: 2px;
+}
+input {
+    margin: 5px;
+}
+.p {
+    border: 1px solid #333; /* Sets width, style, and color */
+    background-color: #e6e2e2;
+    padding-left: 5px;
+    padding-top: 5px;
+}
+.pl {
+    border: 1px solid #333; /* Sets width, style, and color */
+    background-color: #f2f2f2;
+    padding-left: 5px;
+    padding-top: 5px;
+}
+.role-admin {
+    color: #ff1111;
+    font-weight: bold;
+}
+.role-mod {
+    color: #993399;
+    font-weight: bold;
+}
+.role-user {
+    color: #555555;
+}
+.role-unapproved {
+    color: #a5a3a3;
+    font-style: italic;
+}
+.post-unapproved {
+    color: hsl(0, 2%, 79%);
+    font-style: italic;
+}
+
+/* Основная таблица сообщения */
+table.post-table {
+    width: 100%;
+    background: linear-gradient(180deg, #f1f1f1, #cfd4d4);
+    border-collapse: collapse;
+    border: 1px solid #333;
+    margin-bottom: 4px; /* Отступ между сообщениями */
+}
+
+/* Цвета постов (наследуются из ваших классов) */
+table.pl {
+    background-color: #f2f2f2;
+}
+table.p {
+    background-color: #e6e2e2;
+}
+
+/* Левая колонка (Профиль) */
+td.post-author {
+    width: 140px;                 /* Фиксированная ширина профиля */
+    border-right: 1px solid #333;  /* Вертикальный разделитель */
+    padding: 6px 4px;
+    text-align: center;
+    vertical-align: top;
+}
+
+.author-name {
+    font-weight: bold;
+    font-size: 12px;
+    margin-bottom: 2px;
+}
+
+.author-rank {
+    color: #444;
+    font-size: 10px;
+    margin-bottom: 5px;
+}
+
+.avatar {
+    border: 1px solid #999;
+    padding: 1px;
+    background-color: #fff;
+    margin-bottom: 5px;
+}
+
+.author-info {
+    text-align: left;
+    line-height: 1.3;
+    width: 200px;
+    padding-left: 5px;
+}
+
+/* Правая колонка (Контент) */
+td.post-content {
+    vertical-align: top;
+    padding: 6px 8px;
+}
+
+.post-header {
+    width: 100%;
+    margin-bottom: 4px;
+}
+
+/* Выравнивание инструментов модератора вправо (IE6 safe) */
+.mod-tools {
+    float: right;
+}
+
+/* Разделительная линия */
+td.post-content hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    height: 1px;
+    margin: 4px 0 8px 0;
+    clear: both; /* Сброс float от кнопок модерации */
+}
+
+/* Текст сообщения */
+.post-body {
+    display: inherit;
+}
+
+.post-body p {
+    margin: 0;
+}
+
+/* Стили кнопок для IE6 */
+.mod-tools button {
+    font-family: Tahoma, sans-serif;
+    vertical-align: middle;
+}
+
+.file-box {
+    height: 100px;
+    width: 100px;
+    border: solid 1px #888;
+    background: linear-gradient(180deg, #f1f1f1, #b7b9b9);
+    padding: 5px;
+    display: inline-block;
+    vertical-align: top; /* or middle / bottom */
+}
+.image-box {
+    min-height: 100px;
+    min-width: 100px;
+    border: solid 1px #888;
+    background: linear-gradient(180deg, #f1f1f1, #b7b9b9);
+    padding: 5px;
+    display: inline-block;
+    vertical-align: top; /* or middle / bottom */
+}
+
+img {
+  image-rendering: crisp-edges; /* Firefox & general standard */
+  image-rendering: pixelated;   /* Chrome, Edge, Safari, Opera */
+}
+
+.img2x {
+  zoom: 2;
+}
+
+.heading-tb {
+    height: 2vh;
+    resize: none;
+    margin-left: 0;
+    width: 99.75%;
+}
+
+.post-tb {
+    height: 50vh;
+    resize: none;
+    width: 100%;
+}
+
+.dnd {
+    display: grid;
+    place-items: center;
+    text-align: center; /* Ensures multi-line text stays centered */
+    height: 100px;      /* Required so there is vertical space to center within */
+    border: 1px dashed #636262;
+}

@@ -97,6 +97,7 @@ async function loadNews() {
   for (const item of news.items) {
     const row = node('tr'), when = node('td', new Date(item.created_at).toLocaleDateString('ru-RU'), 'news-date');
     const title = node('td'); title.append(link(item.title, '/post.html?id=' + item.id));
+    if (item.status === 'pending') title.append(node('span', ' — Ожидает проверки', 'post-status'));
     row.append(when, title); table.append(row);
   }
   if (!news.items.length) {
@@ -126,8 +127,9 @@ async function profile(id) {
   dialog.addEventListener('close', () => dialog.remove(), { once: true });
   document.body.append(dialog); dialog.showModal();
 }
-function renderPost(item, { title = '', threadLink = true, replyCount } = {}) {
+function renderPost(item, { title = '', threadLink = true, replyCount, pendingReplyCount = 0 } = {}) {
   const table = node('table', null, 'post-table ' + (item.is_root ? 'p' : 'pl'));
+  table.dataset.status = item.status;
   const tbody = node('tbody'), row = node('tr'), author = node('td', null, 'post-author'), content = node('td', null, 'post-content');
   const name = node('div', null, 'author-name');
   const username = item.username || 'Аноним';
@@ -151,17 +153,33 @@ function renderPost(item, { title = '', threadLink = true, replyCount } = {}) {
   if (item.attachments?.length) {
     const files = node('div', null, 'attachments');
     for (const file of item.attachments) {
-      const box = node('div', null, 'file-box' + (file.spoiler ? ' spoiler' : ''));
-      if (file.spoiler) {
-        const details = node('details'), summary = node('summary', 'Файл под спойлером');
-        details.append(summary, link(file.original_name, file.download_url)); box.append(details);
-      } else box.append(link(file.original_name, file.download_url));
+      const box = node('div', null, (file.is_image ? 'image-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
+      if (file.is_image) {
+        const open = link('', file.view_url);
+        open.target = '_blank'; open.rel = 'noopener';
+        open.setAttribute('aria-label', (file.spoiler ? 'Открыть изображение под спойлером: ' : 'Открыть изображение: ') + file.original_name);
+        const image = node('img', null, file.spoiler ? 'spoiler-marker img2x' : 'attachment-preview');
+        image.src = file.spoiler ? '/static/preview/spolier.png' : file.preview_url;
+        image.alt = file.spoiler ? 'Изображение под спойлером' : 'Превью: ' + file.original_name;
+        image.loading = 'lazy';
+        open.append(image); box.append(open, node('div', file.original_name));
+        box.append(link('Скачать полноразмерную картинку', file.download_url));
+      } else {
+        const icon = node('img', null, 'img2x'); icon.src = '/icons/file.png'; icon.alt = '';
+        box.append(icon);
+        if (file.spoiler) {
+          const details = node('details'), summary = node('summary', 'Файл под спойлером');
+          details.append(summary, link(file.original_name, file.download_url)); box.append(details);
+        } else box.append(link(file.original_name, file.download_url));
+      }
       box.append(node('div', `${(file.byte_size / 1024).toFixed(1)} КиБ`)); files.append(box);
     }
     content.append(files);
   }
   if (replyCount !== undefined) {
-    const links = node('p', null, 'post-links'); links.append(link(`Ответов: ${replyCount} →`, '/post.html?id=' + item.thread_id)); content.append(links);
+    const links = node('p', null, 'post-links');
+    const count = `Ответов: ${replyCount}` + (staff() && pendingReplyCount ? ` (на проверке: ${pendingReplyCount})` : '');
+    links.append(link(count + ' →', '/post.html?id=' + item.thread_id)); content.append(links);
   }
   if (staff() && item.status !== 'deleted') {
     const tools = node('div', null, 'mod-tools');
@@ -194,13 +212,14 @@ async function loadFeed() {
   } else if (search) {
     query.set('q', search); title = 'Поиск: ' + search; description = 'Поиск по опубликованным темам и ответам.';
   } else if (params.get('view') === 'all') { title = 'Все темы'; description = 'Публикации из всех разделов.'; }
+  else if (staff()) description = 'Режим персонала: все темы, включая ожидающие проверки. Непроверенные ответы видны внутри тем.';
   else query.set('featured', '1');
   $('#page-title').textContent = title; $('#feed-description').textContent = description;
   const container = $('#feed');
   const data = await api('/threads?' + query);
   const posts = await Promise.all(data.items.map(t => api('/posts/' + t.post_id).then(p => ({ ...t, post: p })).catch(() => null)));
   container.replaceChildren();
-  for (const item of posts.filter(Boolean)) container.append(renderPost(item.post, { title: item.title, replyCount: item.reply_count }));
+  for (const item of posts.filter(Boolean)) container.append(renderPost(item.post, { title: item.title, replyCount: item.reply_count, pendingReplyCount: item.pending_reply_count }));
   if (!posts.filter(Boolean).length) empty(container, 'Тем пока нет. Создайте первую тему или выберите другой раздел.');
   paginate(data);
 }

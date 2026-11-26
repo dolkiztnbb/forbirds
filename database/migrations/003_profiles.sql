@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN description TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN avatar_name TEXT;

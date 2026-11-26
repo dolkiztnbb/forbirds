@@ -64,8 +64,10 @@ function pageQuery() {
 }
 function identityUI() {
   $('#auth-form').hidden = !!me; $('#account').hidden = !me;
-  if (me) $('#account-name').textContent = `${me.username} · ${roleLabels[me.role]}${me.is_banned ? ' · Заблокирован' : ''}`;
+  if (me) $('#account-name').replaceChildren(link(me.username, '/profile.html?id=' + me.id), ` · ${roleLabels[me.role]}${me.is_banned ? ' · Заблокирован' : ''}`);
   $('#my-link').hidden = !me;
+  $('#profile-link').hidden = !me;
+  if (me) $('#profile-link').href = '/profile.html?id=' + me.id;
   $('#queue-link').hidden = !staff();
   if ($('#queue-tab')) $('#queue-tab').hidden = !staff();
 }
@@ -107,7 +109,7 @@ async function loadNews() {
 async function profile(id) {
   const user = await api('/users/' + id);
   const dialog = node('dialog');
-  dialog.append(node('h2', user.username), node('p', `${roleLabels[user.role]} · С нами с ${date(user.created_at)}`), node('p', user.is_banned ? 'Аккаунт заблокирован' : 'Аккаунт активен'));
+  dialog.append(link('Открыть страницу пользователя →', '/profile.html?id=' + id), node('h2', user.username), node('p', `${roleLabels[user.role]} · С нами с ${date(user.created_at)}`), node('p', user.is_banned ? 'Аккаунт заблокирован' : 'Аккаунт активен'));
   if ('auto_approve' in user) dialog.append(node('p', 'Автоподтверждение: ' + (user.auto_approve ? 'выдано' : 'не выдано')));
   const canManage = staff() && user.id !== me.id && user.role !== 'admin' && (admin() || user.role === 'user');
   if (canManage) {
@@ -127,6 +129,12 @@ async function profile(id) {
   dialog.addEventListener('close', () => dialog.remove(), { once: true });
   document.body.append(dialog); dialog.showModal();
 }
+function flagBadge(flag) {
+  const badge = node('span', null, 'user-flag');
+  const image = node('img'); image.src = flag.url; image.alt = ''; image.title = flag.label;
+  badge.append(image, node('span', flag.label));
+  return badge;
+}
 function renderPost(item, { title = '', threadLink = true, replyCount, pendingReplyCount = 0 } = {}) {
   const table = node('table', null, 'post-table ' + (item.is_root ? 'p' : 'pl'));
   table.dataset.status = item.status;
@@ -134,13 +142,13 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   const name = node('div', null, 'author-name');
   const username = item.username || 'Аноним';
   if (item.user_id) {
-    const a = link(username, '#profile-' + item.user_id);
+    const a = link(username, '/profile.html?id=' + item.user_id);
     a.className = 'role-' + (item.author_role === 'moderator' ? 'mod' : item.author_role || 'user');
-    a.addEventListener('click', event => { event.preventDefault(); profile(item.user_id).catch(notify); });
     if (item.author_banned) { const s = node('s'); s.append(a); name.append(s); } else name.append(a);
   } else name.textContent = username;
-  const avatar = node('img', null, 'avatar'); avatar.src = '/avatars/noavatar.png'; avatar.alt = ''; avatar.width = 100; avatar.height = 100;
+  const avatar = node('img', null, 'avatar'); avatar.src = item.avatar_url || '/avatars/noavatar.png'; avatar.alt = ''; avatar.width = 100; avatar.height = 100;
   author.append(name, node('div', roleLabels[item.author_role] || 'Гость', 'author-rank'), avatar);
+  if (item.flag) author.append(flagBadge(item.flag));
   const header = node('div', null, 'post-header');
   if (title) {
     const heading = node('b'); heading.append(threadLink ? link(title, '/post.html?id=' + item.thread_id) : node('span', title)); header.append(heading);
@@ -285,9 +293,99 @@ async function loadDashboard() {
   }
   empty(container, 'Неизвестная вкладка.');
 }
+async function loadProfile() {
+  const id = params.get('id') || (me ? String(me.id) : '');
+  if (!/^[1-9][0-9]*$/.test(id)) throw new Error('Выберите пользователя или войдите, чтобы открыть свой профиль.');
+  const user = await api('/users/' + id);
+  const data = await api(`/users/${id}/posts?` + pageQuery());
+  $('#page-title').textContent = 'Профиль: ' + user.username;
+  document.title = user.username + ' — ForBirds';
+  $('#profile').hidden = false;
+  $('#profile-name').textContent = user.username;
+  $('#profile-avatar').src = user.avatar_url;
+  $('#profile-flag').replaceChildren(...(user.flag ? [flagBadge(user.flag)] : []));
+  $('#profile-description').textContent = user.description || 'Пользователь пока ничего не рассказал о себе.';
+  $('#profile-meta').textContent = `${roleLabels[user.role]} · С нами с ${date(user.created_at)}${user.is_banned ? ' · Заблокирован' : ''}`;
+  const actions = $('#profile-actions'); actions.replaceChildren();
+  if (staff()) actions.append(button('Права / бан пользователя', () => profile(user.id)));
+  const own = me?.id === user.id;
+  $('#profile-editor').hidden = !own || !!me?.is_banned;
+  if (own) {
+    $('#profile-bio').value = user.description;
+    const flags = await api('/flags');
+    const select = $('#profile-flag-select');
+    select.replaceChildren();
+    const none = node('option', 'Без флага'); none.value = ''; select.append(none);
+    for (const flag of flags) {
+      const option = node('option', flag.label); option.value = flag.file; select.append(option);
+    }
+    select.value = user.flag?.file || '';
+    const preview = () => {
+      const flag = flags.find(item => item.file === select.value);
+      $('#profile-flag-preview').replaceChildren(...(flag ? [flagBadge(flag)] : []));
+    };
+    select.onchange = preview; preview();
+    $('#profile-flag-help').textContent = flags.length ? 'Флаг отображается в профиле и возле ваших сообщений. Выбор необязателен.' : 'В папке флагов пока нет доступных изображений.';
+  }
+  $('#profile-posts-note').textContent = staff() ? 'Вам как сотруднику видны все статусы сообщений.'
+    : own ? 'Здесь также видны ваши ожидающие проверки сообщения в доступных вам темах.' : 'Только опубликованные сообщения в открытых для просмотра темах.';
+  const container = $('#profile-posts'); container.replaceChildren();
+  if (!data.items.length) empty(container, 'Нет доступных сообщений.');
+  else {
+    const table = node('table', null, 'table news-table profile-posts-table');
+    const caption = node('caption', 'Темы и ответы · новые сверху');
+    const head = node('thead'), headers = node('tr');
+    for (const text of ['Дата', 'Сообщение']) { const th = node('th', text); th.scope = 'col'; headers.append(th); }
+    head.append(headers);
+    const rows = node('tbody');
+    for (const item of data.items) {
+      const row = node('tr'), when = node('td', null, 'news-date');
+      const time = node('time'); time.dateTime = item.created_at;
+      const timestamp = new Date(item.created_at);
+      time.append(node('span', timestamp.toLocaleDateString('ru-RU')), node('span', timestamp.toLocaleTimeString('ru-RU')));
+      when.append(time);
+      const content = node('td');
+      content.append(link(`${item.is_root ? 'Тема' : 'Ответ'}: ${item.title} · №${item.id}`, item.url));
+      if (item.status !== 'approved' || staff()) content.append(node('span', ' — ' + labels[item.status], 'post-status'));
+      content.append(node('div', item.excerpt, 'profile-excerpt'));
+      row.dataset.status = item.status; row.append(when, content); rows.append(row);
+    }
+    table.append(caption, head, rows); container.append(table);
+  }
+  paginate(data);
+}
+
+const profileForm = $('#profile-form');
+if (profileForm) {
+  profileForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const submit = profileForm.querySelector('[type=submit]');
+    if (submit.disabled) return;
+    submit.disabled = true;
+    const result = $('#profile-result'); result.textContent = 'Сохранение…';
+    try {
+      const data = new FormData(profileForm), file = profileForm.elements.avatar.files[0];
+      if (!file) data.delete('avatar');
+      data.set('remove_avatar', profileForm.elements.remove_avatar.checked ? '1' : '0');
+      if (file && file.size > 2 * 1024 * 1024) throw new Error('Аватарка должна быть не больше 2 МиБ.');
+      me = await post('/me/profile', data);
+      profileForm.reset(); identityUI(); await loadProfile();
+      result.textContent = 'Профиль сохранён.';
+    } catch (error) { result.textContent = error.message; }
+    finally { submit.disabled = false; }
+  });
+  profileForm.elements.avatar.addEventListener('change', () => {
+    if (profileForm.elements.avatar.files.length) profileForm.elements.remove_avatar.checked = false;
+  });
+  profileForm.elements.remove_avatar.addEventListener('change', () => {
+    if (profileForm.elements.remove_avatar.checked) profileForm.elements.avatar.value = '';
+  });
+}
+
 async function loadView() {
   if (document.body.dataset.page === 'index') return loadFeed();
   if (document.body.dataset.page === 'post') return loadThread();
+  if (document.body.dataset.page === 'profile') return loadProfile();
   return loadDashboard();
 }
 
@@ -479,6 +577,6 @@ async function main() {
 }
 main().catch(error => {
   notify(error);
-  const target = $('#feed') || $('#thread') || $('#dashboard-content');
+  const target = $('#feed') || $('#thread') || $('#profile-posts') || $('#dashboard-content');
   if (target) empty(target, error.message);
 });

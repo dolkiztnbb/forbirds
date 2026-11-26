@@ -43,7 +43,7 @@ const path = require('node:path');
       headerHeight: getComputedStyle(document.querySelector('.sub')).height,
       bannerWidth: document.querySelector('.banner-placeholder').getBoundingClientRect().width,
       bannerHeight: document.querySelector('.banner-placeholder').getBoundingClientRect().height,
-      scrollHeight: getComputedStyle(document.querySelector('.main-content > .scroll')).height,
+      scrollOverflow: getComputedStyle(document.querySelector('.main-content > .scroll')).overflowY,
       textareaHeight: document.querySelector('.post-tb').getBoundingClientRect().height,
       viewportHeight: innerHeight,
       composerIsTable: document.querySelector('#post-form > .composer-table')?.tagName === 'TABLE',
@@ -52,7 +52,7 @@ const path = require('node:path');
     assert.equal(originalLayout.headerHeight, '30px');
     assert.equal(originalLayout.bannerWidth, 600);
     assert.equal(originalLayout.bannerHeight, 200);
-    assert.equal(originalLayout.scrollHeight, '640px');
+    assert.equal(originalLayout.scrollOverflow, 'auto');
     assert.ok(Math.abs(originalLayout.textareaHeight - originalLayout.viewportHeight / 2) <= 2);
     assert.equal(originalLayout.composerIsTable, true);
     assert.equal(originalLayout.navigationInSidebar, true);
@@ -153,6 +153,11 @@ const path = require('node:path');
     assert.equal(await user.evaluate(() => window.XSS), undefined);
     assert.equal(await user.locator('.avatar').first().evaluate(img => img.getBoundingClientRect().width), 104);
     const threadUrl = user.url();
+    const pendingProfileUrl = await user.locator('#account-name a').getAttribute('href');
+    await guest.goto(base + pendingProfileUrl);
+    await guest.locator('#profile').waitFor();
+    assert.equal(await guest.locator('#profile-posts a').count(), 0, 'pending posts must not leak in public profiles');
+
     const sectionId = await user.locator('#section-select').inputValue();
     await administrator.goto(base + '/index.html?section_id=' + sectionId);
     const pendingTopic = administrator.locator('#feed .post-table[data-status=pending]');
@@ -163,6 +168,7 @@ const path = require('node:path');
     await administrator.waitForLoadState('networkidle');
     await administrator.goto(threadUrl);
     await administrator.getByRole('link', { name: 'browser_user', exact: true }).click();
+    await administrator.getByRole('button', { name: 'Права / бан пользователя' }).click();
     await administrator.getByRole('button', { name: 'Выдать автоподтверждение' }).click();
     await administrator.getByRole('button', { name: 'Отозвать автоподтверждение' }).waitFor();
     await administrator.getByRole('button', { name: 'Закрыть', exact: true }).click();
@@ -231,6 +237,59 @@ const path = require('node:path');
     await login(modSettings, 'moderator');
     assert.equal(await modSettings.locator('#section-admin').isVisible(), false);
     await modSettings.close();
+
+    // Own profile editing, public profile rendering, and avatars in existing posts.
+    await user.goto(base + '/dashboard.html');
+    await user.waitForLoadState('networkidle');
+    await user.locator('#account-name a').click();
+    await user.locator('#profile-editor').waitFor();
+    await user.waitForLoadState('networkidle');
+    const profileUrl = user.url();
+    const profileForm = user.locator('#profile-form');
+    const bio = '<script>window.profileXss = true</script> Люблю наблюдать за птицами.';
+    await profileForm.getByLabel('О себе', { exact: true }).fill(bio);
+    await profileForm.getByLabel('Флаг', { exact: true }).selectOption('ru.gif');
+    assert.equal(await user.locator('#profile-flag-preview .user-flag').textContent(), 'Россия');
+    await profileForm.getByLabel('Новая аватарка', { exact: true }).setInputFiles(path.join(process.env.FORBIRDS_TEST_FIXTURES, 'wide.png'));
+    await profileForm.getByRole('button', { name: 'Сохранить профиль' }).click();
+    await user.locator('#profile-result').filter({ hasText: 'Профиль сохранён.' }).waitFor();
+    await user.waitForFunction(() => document.querySelector('#profile-avatar').complete && document.querySelector('#profile-avatar').naturalWidth === 256);
+    assert.equal(await user.locator('#profile-description').textContent(), bio);
+    assert.equal(await user.locator('#profile-flag .user-flag').textContent(), 'Россия');
+    assert.equal(await user.evaluate(() => window.profileXss), undefined);
+    await user.reload();
+    await user.locator('#profile-editor').waitFor();
+    await user.waitForLoadState('networkidle');
+    assert.equal(await user.locator('#profile-bio').inputValue(), bio);
+    assert.equal(await profileForm.getByLabel('Флаг', { exact: true }).inputValue(), 'ru.gif');
+    await guest.goto(profileUrl);
+    await guest.locator('#profile').waitFor();
+    assert.equal(await guest.locator('#profile-editor').isVisible(), false);
+    assert.equal(await guest.locator('#profile-description').textContent(), bio);
+    assert.equal(await guest.locator('#profile-flag .user-flag').textContent(), 'Россия');
+    assert.equal(await guest.evaluate(() => window.profileXss), undefined);
+    assert.equal(await guest.locator('#profile-posts .post-table').count(), 0, 'profile posts must be compact rows, not full post cards');
+    await guest.locator('#profile-posts a').filter({ hasText: 'Browser registered topic' }).click();
+    await guest.waitForFunction(() => document.querySelector('.avatar')?.complete && document.querySelector('.avatar').naturalWidth === 256);
+    assert.equal(await guest.locator('.post-author .user-flag').first().textContent(), 'Россия');
+    await guest.locator('.author-name a').click();
+    await guest.locator('#profile').waitFor();
+    for (const width of [1280, 375]) {
+      await user.setViewportSize({ width, height: 900 });
+      assert.equal(await user.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await guest.setViewportSize({ width, height: 900 });
+      assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    await profileForm.getByLabel('Флаг', { exact: true }).selectOption('');
+    await profileForm.getByLabel('Удалить аватарку', { exact: true }).check();
+    await profileForm.getByRole('button', { name: 'Сохранить профиль' }).click();
+    await user.locator('#profile-result').filter({ hasText: 'Профиль сохранён.' }).waitFor();
+    assert.equal(await user.locator('#profile-avatar').getAttribute('src'), '/avatars/noavatar.png');
+    assert.equal(await user.locator('#profile-flag .user-flag').count(), 0);
+    await guest.goto(base + '/profile.html?id=99999999');
+    await guest.locator('#notice.error').waitFor();
+    assert.equal(await guest.locator('#profile').isVisible(), false);
+
   } finally {
     await browser.close();
   }

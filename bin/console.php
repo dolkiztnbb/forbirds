@@ -10,8 +10,8 @@ if (PHP_SAPI !== 'cli') {
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
 try {
     $command = $argv[1] ?? '';
-    if (!in_array($command, ['install', 'migrate', 'create-admin'], true)) {
-        throw new RuntimeException("Команды: install | migrate | create-admin USERNAME (пароль через stdin)");
+    if (!in_array($command, ['install', 'migrate', 'create-admin', 'prune-identities', 'reindex-media', 'purge-banned-media'], true)) {
+        throw new RuntimeException("Команды: install | migrate | create-admin USERNAME | prune-identities | reindex-media | purge-banned-media");
     }
     umask(0077);
     foreach (['', '/sessions', '/uploads', '/previews', '/avatars'] as $directory) {
@@ -28,7 +28,38 @@ try {
     $db = Database::connect($config['database']);
     chmod($config['database'], 0600);
     Database::migrate($db);
-    if ($command === 'create-admin') {
+    if ($command === 'prune-identities') {
+        $db->prepare("UPDATE posts SET author_ip=NULL,browser_id=NULL,fingerprint=NULL WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days')")->execute();
+        $db->prepare('DELETE FROM privacy_access WHERE created_at < ?')->execute([time() - 30 * 86400]);
+        $db->prepare('DELETE FROM identity_bans WHERE expires_at <= ?')->execute([time()]);
+        echo "Old identity records removed.\n";
+    } elseif (in_array($command, ['reindex-media', 'purge-banned-media'], true)) {
+        $screening = new ForBirds\MediaBans($db);
+        $cursor = $db->query("SELECT * FROM attachments WHERE moderation_state != 'deleted'");
+        while ($file = $cursor->fetch()) {
+            $path = $config['storage'] . '/uploads/' . $file['storage_name'];
+            if (!is_file($path)) continue;
+            $hashes = ForBirds\MediaBans::hashes($path, $file['mime_type']);
+            $db->prepare('UPDATE attachments SET sha256=?,dhash=?,ahash=? WHERE id=?')->execute([
+                $hashes['sha256'], $hashes['dhash'], $hashes['ahash'], $file['id']]);
+            if ($command === 'purge-banned-media' && $screening->matches($hashes)) {
+                $db->prepare("UPDATE attachments SET moderation_state='deleted' WHERE id=?")->execute([$file['id']]);
+                foreach ([$path, (new ForBirds\ImagePreview($config['storage']))->path($file['storage_name'])] as $remove) {
+                    if (is_file($remove) && !unlink($remove)) throw new RuntimeException('Cannot purge media.');
+                }
+            }
+        }
+        if ($command === 'purge-banned-media') {
+            foreach ($db->query('SELECT id,avatar_name FROM users WHERE avatar_name IS NOT NULL') as $user) {
+                $path = (new ForBirds\ImagePreview($config['storage'], 'avatars'))->path($user['avatar_name']);
+                if (is_file($path) && $screening->matches(ForBirds\MediaBans::hashes($path, 'image/jpeg'))) {
+                    $db->prepare('UPDATE users SET avatar_name=NULL WHERE id=?')->execute([$user['id']]);
+                    if (!unlink($path)) throw new RuntimeException('Cannot purge avatar.');
+                }
+            }
+        }
+        echo "Media processing complete.\n";
+    } elseif ($command === 'create-admin') {
         $username = $argv[2] ?? '';
         if (!preg_match('/\A[a-zA-Z0-9_]{3,32}\z/', $username)) {
             throw new RuntimeException('Имя: 3–32 латинских буквы, цифры или _.');

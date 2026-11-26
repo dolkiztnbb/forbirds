@@ -4,7 +4,7 @@ const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toStr
 (async () => {
   const source = fs.readFileSync('public/en.js', 'utf8');
   const english = (await import(uri(source))).default;
-  for (const filename of ['app.js', 'i18n.js']) {
+  for (const filename of ['app.js', 'i18n.js', 'moderation.js', 'fingerprint.js']) {
     const js = fs.readFileSync('public/' + filename, 'utf8');
     // All source-language system literals must have an English entry, including
     // keys selected indirectly (for example, worker error codes).

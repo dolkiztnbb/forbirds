@@ -33,7 +33,7 @@ try {
     $_SESSION['csrf'] ??= bin2hex(random_bytes(32));
     $api = new Api(Database::connect($config['database']), $config);
     $data = $api->dispatch($_SERVER['REQUEST_METHOD'], parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
-    echo json_encode(['data' => $data], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    echo json_encode(['data' => \ForBirds\AbuseIdentity::redact($data)], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 } catch (ApiError $e) {
     http_response_code($e->status);
     if ($e->status === 405) {

@@ -1,4 +1,6 @@
 import { t, locale, initLanguage } from '/i18n.js';
+import { browserSignal } from '/fingerprint.js';
+import { moderationUI } from '/moderation.js';
 await initLanguage();
 
 const $ = selector => document.querySelector(selector);
@@ -8,6 +10,14 @@ const roleLabels = { user: t("Участник"), moderator: t("Модерато
 let me = null, csrf = '', sections = [], composer = null;
 const staff = () => me && !me.is_banned && ['moderator', 'admin'].includes(me.role);
 const admin = () => staff() && me.role === 'admin';
+const privacyNotice = document.createElement('details'); privacyNotice.className = 'privacy-notice';
+const privacySummary = document.createElement('summary'); privacySummary.textContent = t('Приватность и защита от спама');
+const privacyText = document.createElement('p');
+privacyText.textContent = t('Для борьбы со спамом сохраняются IP публикаций, случайный cookie ID и хэш отпечатка браузера (Canvas/WebGL). Это не аппаратный ID. IP доступны только администратору с включённым показом; доступ журналируется. Срок хранения IP — 30 дней при ежедневной очистке.');
+privacyNotice.append(privacySummary, privacyText); document.querySelector('header').after(privacyNotice);
+const signal = browserSignal();
+const moderation = moderationUI({ node, button, link, api, post: (...args) => post(...args), notify,
+  refresh: async () => { await loadView(); await loadNews(); await loadSections(); }, staff, admin });
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text !== undefined && text !== null) element.textContent = text;
@@ -30,6 +40,7 @@ function notify(value, isError = true) {
 }
 async function api(path, { method = 'GET', body } = {}) {
   const headers = { 'Accept-Language': document.documentElement.lang };
+  if (signal) headers['X-ForBirds-Fingerprint'] = signal;
   if (method === 'POST') headers['X-CSRF-Token'] = csrf;
   if (body !== undefined && !(body instanceof FormData)) {
     headers['Content-Type'] = 'application/json'; body = JSON.stringify(body);
@@ -202,6 +213,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   } else name.textContent = username;
   const avatar = node('img', null, 'avatar'); avatar.src = item.avatar_url || '/avatars/noavatar.png'; avatar.alt = ''; avatar.width = 100; avatar.height = 100;
   author.append(name, node('div', roleLabels[item.author_role] || t("Гость"), 'author-rank'), avatar);
+  if (admin()) author.append(moderation.identityBadge(item.id));
   if (item.flag) author.append(flagBadge(item.flag));
   const header = node('div', null, 'post-header');
   if (title) {
@@ -216,6 +228,11 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
     const files = node('div', null, 'attachments');
     for (const file of item.attachments) {
       const box = node('div', null, (file.is_image ? 'image-box' : file.is_video ? 'video-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
+      if (staff()) box.append(moderation.fileTools(file));
+      if (!file.download_url) {
+        box.append(node('p', file.original_name + ' · ' + (file.blocked ? t('Файл заблокирован') : file.moderation_state === 'deleted' ? t('Файл удалён') : t('Файл скрыт'))));
+        files.append(box); continue;
+      }
       if (file.is_image) {
         const open = link('', file.view_url);
         open.setAttribute('aria-haspopup', 'dialog');
@@ -273,6 +290,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
       b.disabled = (action === 'approve' && item.status === 'approved') || (action === 'unapprove' && item.status === 'pending');
       tools.append(b);
     }
+    tools.append(moderation.moveButton(item));
     if (item.user_id && item.user_id !== me.id && item.author_role !== 'admin') tools.append(button(t("Права / бан автора"), () => profile(item.user_id)));
     header.append(tools);
   }
@@ -339,11 +357,14 @@ async function loadDashboard() {
     if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
   }
-  if (mode === 'queue' || mode === 'audit') {
+  if (mode === 'media-bans' || mode === 'identity-bans') {
+    paginate(await moderation.bans(container, mode)); return;
+  }
+  if (mode === 'queue' || mode === 'audit' || mode === 'archive') {
     if (!staff()) { empty(container, t("Для этой страницы нужны права модератора.")); return; }
     container.append(link(mode === 'queue' ? t("Журнал модерации →") : t("← Очередь"), '?mode=' + (mode === 'queue' ? 'audit' : 'queue')));
     const data = await api('/moderation/' + mode + '?' + pageQuery());
-    if (!data.items.length) container.append(node('p', mode === 'queue' ? t("Очередь пуста.") : t("Журнал пуст.")));
+    if (!data.items.length) container.append(node('p', mode === 'queue' ? t("Очередь пуста.") : mode === 'archive' ? t("Сообщений пока нет.") : t("Журнал пуст.")));
     if (mode === 'audit') {
       for (const entry of data.items) container.append(node('p', `${date(entry.created_at)} · #${entry.actor_id}: ${entry.action} · ${entry.target_type} №${entry.target_id} · ${entry.details}`));
     } else {
@@ -417,6 +438,7 @@ async function loadProfile() {
       content.append(link(`${item.is_root ? t("Тема") : t("Ответ")}: ${item.title} · №${item.id}`, item.url));
       if (item.status !== 'approved' || staff()) content.append(node('span', ' — ' + labels[item.status], 'post-status'));
       content.append(node('div', item.excerpt, 'profile-excerpt'));
+      if (admin()) content.append(moderation.identityBadge(item.id));
       row.dataset.status = item.status; row.append(when, content); rows.append(row);
     }
     table.append(caption, head, rows); container.append(table);
@@ -559,6 +581,7 @@ class Composer {
     this.busy = true; this.controls();
     const data = new FormData();
     data.set('body', this.form.elements.body.value);
+    if (this.threadId) data.set('sage', this.form.elements.sage.checked ? '1' : '0');
     data.set('pow_id', this.proof.pow_id); data.set('pow_nonce', this.proof.pow_nonce);
     if (!this.threadId) {
       data.set('section_id', $('#section-select').value); data.set('title', this.form.elements.title.value);
@@ -640,6 +663,8 @@ $('#logout').addEventListener('click', async () => {
 });
 async function main() {
   const session = await api('/session'); me = session.user; identityUI();
+  moderation.setIdentity(session.privacy_enabled);
+  if ($('.dashboard-nav')) moderation.navigation($('.dashboard-nav'));
   await Promise.all([loadSections(), loadNews()]);
   await loadView(); adminSections();
   let message;

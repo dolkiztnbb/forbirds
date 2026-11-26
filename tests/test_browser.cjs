@@ -103,6 +103,7 @@ const path = require('node:path');
     const guest = await page(guestContext), administrator = await page(adminContext), user = await page(userContext);
     await guest.goto(base + '/dashboard.html');
     await guest.waitForFunction(() => document.querySelector('#section-select')?.options.length > 0);
+    await guest.locator('#composer').waitFor();
     const originalLayout = await guest.evaluate(() => ({
       headerHeight: getComputedStyle(document.querySelector('.sub')).height,
       bannerWidth: document.querySelector('.banner-placeholder').getBoundingClientRect().width,

@@ -172,3 +172,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 #language-dialog h2 { font-size: 1.1rem; margin: 0 0 1rem; }
 #language-dialog button { margin: .25rem; padding: .5rem; }
 #language-switch { margin: .25rem; }
+
+/* Review/deletion states remain staff/author-only according to server visibility. */
+.post-table[data-status=pending], .post-table[data-status=deleted] {
+  opacity: .65;
+  background-color: #fff3a8;
+}
+.post-table[data-status=pending] td, .post-table[data-status=deleted] td { background-color: #fff3a8; }
+.profile-posts-table tr[data-status=pending], .profile-posts-table tr[data-status=deleted] { background: #fff3a8; opacity: .65; }
+.privacy-notice { margin: 5px; font-size: 11px; color: #444; }
+.privacy-notice p { max-width: 70rem; }
+.post-identity { display: block; font-size: 10px; overflow-wrap: anywhere; margin-top: 5px; }
+.post-identity:empty, .file-tools:empty { display: none; }
+.post-identity button, .file-tools button { font-size: 10px; max-width: 100%; }
+.file-tools { border-bottom: 1px dashed #888; padding-bottom: 4px; }

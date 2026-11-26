@@ -7,6 +7,16 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Публикация с этого подключения или браузера ограничена.' => 'Posting from this connection or browser is restricted.',
+        'Файл заблокирован: совпадение с запрещённым материалом.' => 'File blocked: matches banned material.',
+        'Сначала включите показ IP в панели управления.' => 'Enable IP display in the dashboard first.',
+        'Некорректный тип блокировки.' => 'Invalid ban type.',
+        'Некорректная IP-сеть.' => 'Invalid IP network.',
+        'Для этого сообщения нет такого идентификатора.' => 'This post has no such identifier.',
+        'Максимальный срок блокировки — 8760 часов.' => 'The maximum ban duration is 8760 hours.',
+        'Источник и назначение совпадают.' => 'The source and destination are the same.',
+        'Некорректное действие с файлом.' => 'Invalid file action.',
+        'Файл уже удалён.' => 'This file has already been deleted.',
         'Используйте GET или POST.' => 'Use GET or POST.',
         'Получите CSRF-токен через GET /api/session.' => 'Get a CSRF token via GET /api/session.',
         'Аккаунт заблокирован.' => 'Your account is banned.',

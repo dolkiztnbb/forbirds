@@ -47,15 +47,15 @@ const path = require('node:path');
       textareaHeight: document.querySelector('.post-tb').getBoundingClientRect().height,
       viewportHeight: innerHeight,
       composerIsTable: document.querySelector('#post-form > .composer-table')?.tagName === 'TABLE',
-      navigationInSidebar: !!document.querySelector('.sidebar .site-nav'),
+      navigationInHeader: !!document.querySelector('.sub .site-nav'),
     }));
-    assert.equal(originalLayout.headerHeight, '30px');
+    assert.ok(parseFloat(originalLayout.headerHeight) >= 30);
     assert.equal(originalLayout.bannerWidth, 600);
     assert.equal(originalLayout.bannerHeight, 200);
     assert.equal(originalLayout.scrollOverflow, 'auto');
     assert.ok(Math.abs(originalLayout.textareaHeight - originalLayout.viewportHeight / 2) <= 2);
     assert.equal(originalLayout.composerIsTable, true);
-    assert.equal(originalLayout.navigationInSidebar, true);
+    assert.equal(originalLayout.navigationInHeader, true);
     await guest.locator('#post-form [name=title]').fill('Browser guest topic');
     await guest.locator('#post-form [name=body]').fill('Guest message through a real form');
     const fixture = filename => fs.readFileSync(path.join(process.env.FORBIRDS_TEST_FIXTURES, filename));
@@ -66,9 +66,12 @@ const path = require('node:path');
       { name: 'hidden.png', mimeType: 'image/png', buffer: fixture('wide.png') },
       { name: 'wide.jpg', mimeType: 'image/jpeg', buffer: fixture('wide.jpg') },
       { name: 'wide.webp', mimeType: 'image/webp', buffer: fixture('wide.webp') },
+      { name: 'sample.webm', mimeType: 'video/webm', buffer: fixture('sample.webm') },
+      { name: 'hidden.webm', mimeType: 'video/webm', buffer: fixture('sample.webm') },
     ]);
     await guest.locator('#file-list input[type=checkbox]').nth(0).check();
     await guest.locator('#file-list input[type=checkbox]').nth(3).check();
+    await guest.locator('#file-list input[type=checkbox]').nth(7).check();
     assert.equal(await guest.locator('#post-submit').isDisabled(), true);
     await solve(guest);
     await guest.locator('#post-submit').click();
@@ -102,7 +105,7 @@ const path = require('node:path');
     await administrator.getByText('Очередь пуста.', { exact: true }).waitFor();
     await guest.goto(base + '/index.html?view=all');
     await guest.getByRole('link', { name: 'Browser guest topic', exact: true }).click();
-    await guest.getByText('Guest message through a real form', { exact: true }).waitFor();
+    await guest.locator('#thread .post-body').filter({ hasText: 'Guest message through a real form' }).waitFor();
     await guest.waitForFunction(() => {
       const previews = [...document.querySelectorAll('.attachment-preview')];
       return previews.length === 4 && previews.every(img => img.complete && img.naturalWidth > 0 && img.naturalWidth <= 256 && img.naturalHeight <= 256);
@@ -113,23 +116,40 @@ const path = require('node:path');
     const attachments = (await threadResponse.json()).data.post.attachments;
     const hiddenImage = attachments.find(file => file.original_name === 'hidden.png');
     assert.equal(mediaRequests.some(url => url.endsWith(hiddenImage.preview_url)), false, 'spoilers must not fetch the real thumbnail');
-    const [fullGif] = await Promise.all([
-      guest.waitForEvent('popup'),
-      guest.getByRole('link', { name: 'Открыть изображение: wide.gif', exact: true }).click(),
-    ]);
-    await fullGif.waitForLoadState('domcontentloaded');
-    assert.equal(await fullGif.locator('img').evaluate(async image => { await image.decode(); return image.naturalWidth; }), 512);
-    await fullGif.close();
-    const [revealed] = await Promise.all([
-      guest.waitForEvent('popup'),
-      guest.getByRole('link', { name: 'Открыть изображение под спойлером: hidden.png', exact: true }).click(),
-    ]);
-    await revealed.waitForLoadState('domcontentloaded');
-    assert.equal(await revealed.locator('img').evaluate(async image => { await image.decode(); return image.naturalWidth; }), 512);
-    await revealed.close();
-    assert.equal(mediaRequests.some(url => url.endsWith(hiddenImage.preview_url)), false);
+    const oldUrl = guest.url(), pageCount = guestContext.pages().length;
+    await guest.getByRole('link', { name: 'Открыть изображение: wide.gif', exact: true }).click();
+    const viewer = guest.getByRole('dialog', { name: 'Просмотр изображения: wide.gif', exact: true });
+    await viewer.waitFor();
+    assert.equal(await viewer.locator('img').evaluate(async image => { await image.decode(); return image.naturalWidth; }), 512);
+    assert.equal(guest.url(), oldUrl);
+    assert.equal(guestContext.pages().length, pageCount);
+    await guest.keyboard.press('Escape');
+    await viewer.waitFor({ state: 'detached' });
+    assert.equal(await guest.getByRole('link', { name: 'Открыть изображение: wide.gif', exact: true }).evaluate(a => a === document.activeElement), true);
     await guest.setViewportSize({ width: 375, height: 812 });
+    await guest.getByRole('link', { name: 'Открыть изображение под спойлером: hidden.png', exact: true }).click();
+    const revealed = guest.getByRole('dialog', { name: 'Просмотр изображения: hidden.png', exact: true });
+    assert.equal(await revealed.locator('img').evaluate(async image => { await image.decode(); return image.naturalWidth; }), 512);
+    const fits = await revealed.locator('img').evaluate(image => {
+      const r = image.getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+    });
+    assert.equal(fits, true);
+    await revealed.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    assert.equal(mediaRequests.some(url => url.endsWith(hiddenImage.preview_url)), false);
+    const hiddenVideo = attachments.find(file => file.original_name === 'hidden.webm');
+    assert.equal(mediaRequests.some(url => url.endsWith(hiddenVideo.view_url)), false);
+    const visibleVideo = guest.locator('video.attachment-video');
+    assert.equal(await visibleVideo.count(), 1);
+    assert.equal(await visibleVideo.getAttribute('preload'), 'none');
+    assert.equal(await visibleVideo.evaluate(v => v.paused && !v.autoplay), true);
+    assert.equal(await visibleVideo.evaluate(async v => { await v.play(); return v.videoWidth; }), 160);
+    await visibleVideo.evaluate(v => { v.pause(); });
+    await guest.getByText('Видео под спойлером: hidden.webm', { exact: true }).click();
+    await guest.waitForFunction(() => document.querySelectorAll('video.attachment-video').length === 2);
     assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const recent = guest.locator('#sections .section-recent li');
+    assert.equal(await recent.count(), 1);
+    assert.equal(await recent.locator('a').getAttribute('href'), '/post.html?id=' + threadId + '&page=1#post-' + (await threadResponse.json()).data.post.id);
     await guest.setViewportSize({ width: 1280, height: 720 });
     await guest.locator('summary').filter({ hasText: 'Файл под спойлером' }).click();
     assert.equal(await guest.getByRole('link', { name: 'browser.txt', exact: true }).isVisible(), true);

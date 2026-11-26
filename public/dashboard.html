@@ -11,6 +11,11 @@
 <body data-page="dashboard">
   <header>
     <div class="sub">
+    <nav class="site-nav" aria-label="Навигация">
+      <a href="/">Главная</a> <a href="/index.html?view=all">Все темы</a>
+      <a href="/dashboard.html">Создать тему</a> <a href="/profile.html" id="profile-link" hidden>Моя страница</a> <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
+      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
+    </nav>
       <form id="auth-form" action="/api/auth/login" method="post">
         Вход <input aria-label="Имя пользователя" placeholder="имя пользователя" name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+">
         <input aria-label="Пароль" placeholder="пароль" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72">
@@ -34,11 +39,6 @@
   <div class="title" id="page-title">Публикации и управление</div>
   <table class="main-layout"><tbody><tr>
     <td class="sidebar">
-    <nav class="site-nav" aria-label="Навигация">
-      <a href="/">Главная</a> · <a href="/index.html?view=all">Все темы</a> ·
-      <a href="/dashboard.html">Создать тему</a> · <a href="/profile.html" id="profile-link" hidden>Моя страница</a> · <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
-      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
-    </nav>
       <nav class="sidebar-scroll" id="sections" aria-label="Разделы">Загрузка разделов…</nav></td>
     <td class="main-content">
       <hr>
@@ -71,7 +71,7 @@
               <td>
                 <div class="dnd" id="drop-zone" tabindex="0" aria-label="Загрузка файлов">
                   <label>Перетащите или вставьте файлы сюда
-                    <input id="file-input" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.pdf,.zip">
+                    <input id="file-input" type="file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.mp4,.webm,.txt,.pdf,.zip">
                   </label>
                   <small>До 10 файлов, 5 МиБ каждый, 20 МиБ суммарно.</small>
                 </div>

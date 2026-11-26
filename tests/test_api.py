@@ -133,6 +133,8 @@ class ApiTests(unittest.TestCase):
         delay = b'\x21\xf9\x04\x00\x0a\x00\x00\x00'
         animation = b'GIF89a' + gif[6:table_end] + b'\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00' + delay + frame + delay + frame + b'\x3b'
         (cls.fixtures / 'animated.gif').write_bytes(animation)
+        for filename in ['sample.mp4', 'sample.webm']:
+            (cls.fixtures / filename).write_bytes((ROOT / 'tests' / 'fixtures' / filename).read_bytes())
         with socket.socket() as sock:
             sock.bind(('0.0.0.0', 0))
             cls.port = sock.getsockname()[1]
@@ -604,6 +606,110 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(self.ok(self.guest.get('/api/threads?limit=1&page=2'))['items']), 1)
         self.ok(self.guest.get('/api/threads?page=0'), 422)
         self.ok(self.guest.get('/api/threads?section_id=1%20OR%201=1'), 422)
+
+    def video_post(self, filename='sample.webm', client=None):
+        client = client or self.normal
+        result = self.ok(client.upload('/api/threads', {
+            'section_id': self.section, 'title': 'Video topic', 'body': 'Video attachment',
+        }, [(filename, (self.fixtures / filename).read_bytes())]), 201)
+        video = self.ok(client.get(f'/api/posts/{result["post_id"]}'))['attachments'][0]
+        return result, video
+
+    def test_embedded_videos_visibility_mime_and_original_bytes(self):
+        for filename in ['sample.mp4', 'sample.webm']:
+            result, video = self.video_post(filename)
+            self.assertTrue(video['is_video'])
+            self.assertFalse(video['is_image'])
+            self.assertIsNone(video['preview_url'])
+            for endpoint in ['view_url', 'download_url']:
+                self.ok(self.guest.get(video[endpoint]), 404)
+                self.ok(self.guest.request('HEAD', video[endpoint]), 404)
+                self.ok(self.guest.request('GET', video[endpoint], headers={'Range': 'bytes=0-9'}), 404)
+            self.ok(self.normal.get(f'/api/attachments/{video["id"]}/preview'), 404)
+            response = self.normal.get(video['view_url'])
+            self.assertEqual(self.ok(response), (self.fixtures / filename).read_bytes())
+            self.assertEqual(response[2]['Content-Type'], 'video/mp4' if filename.endswith('.mp4') else 'video/webm')
+            self.assertIn('inline;', response[2]['Content-Disposition'])
+            self.assertIn('no-store', response[2]['Cache-Control'])
+            self.moderate(result['post_id'])
+            self.assertEqual(self.ok(self.guest.get(video['view_url'])), (self.fixtures / filename).read_bytes())
+            self.assertIn('attachment;', self.guest.get(video['download_url'])[2]['Content-Disposition'])
+            self.moderate(result['post_id'], 'delete')
+            self.ok(self.guest.get(video['view_url']), 404)
+            self.ok(self.normal.get(video['view_url']), 404)
+            self.ok(self.mod.get(video['view_url']))
+        fields = {'section_id': self.section, 'title': 'Fake video', 'body': 'bad'}
+        self.ok(self.normal.upload('/api/threads', fields, [('fake.mp4', b'<html>Not video</html>')]), 422)
+        self.ok(self.normal.upload('/api/threads', fields, [('fake.webm', (self.fixtures / 'wide.png').read_bytes())]), 422)
+
+    def test_video_byte_ranges_head_and_parent_access(self):
+        result, video = self.video_post(client=self.admin)
+        data = (self.fixtures / 'sample.webm').read_bytes()
+        url = video['view_url']
+        for header, start, end in [('bytes=0-9', 0, 9), ('bytes=10-', 10, len(data)-1),
+                                    ('bytes=-12', len(data)-12, len(data)-1),
+                                    ('bytes=0-9999999', 0, len(data)-1)]:
+            response = self.guest.request('GET', url, headers={'Range': header})
+            self.assertEqual(self.ok(response, 206), data[start:end+1])
+            self.assertEqual(response[2]['Content-Range'], f'bytes {start}-{end}/{len(data)}')
+            self.assertEqual(int(response[2]['Content-Length']), end-start+1)
+        for header in ['bytes=999999-', 'bytes=-0', 'bytes=10-1', 'bytes=0-1,4-5', 'nonsense']:
+            response = self.guest.request('GET', url, headers={'Range': header})
+            self.ok(response, 416)
+            self.assertEqual(response[2]['Content-Range'], f'bytes */{len(data)}')
+        head = self.guest.request('HEAD', url, headers={'Range': 'bytes=0-9'})
+        self.assertEqual(self.ok(head), b'')
+        self.assertEqual(int(head[2]['Content-Length']), len(data))
+        self.assertEqual(head[2]['Accept-Ranges'], 'bytes')
+        self.assertEqual(self.ok(self.guest.request('GET', url, headers={'Range': 'bytes=0-9', 'If-Range': 'outdated'})), data)
+        reply = self.ok(self.mod.upload(f'/api/threads/{result["thread_id"]}/replies', {'body': 'Video reply'},
+            [('sample.webm', data)]), 201)
+        reply_url = self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['attachments'][0]['view_url']
+        self.moderate(result['post_id'], 'unapprove')
+        for hidden in [url, reply_url]:
+            self.ok(self.guest.request('GET', hidden, headers={'Range': 'bytes=0-9'}), 404)
+            self.ok(self.guest.request('HEAD', hidden), 404)
+            self.ok(self.mod.request('GET', hidden, headers={'Range': 'bytes=0-9'}), 206)
+        self.ok(self.guest.request('HEAD', '/api/threads'), 405)
+
+    def test_sections_recent_five_roots_and_replies_visibility(self):
+        root = self.topic()
+        tid = root['thread_id']
+        pending = self.ok(self.normal.post(f'/api/threads/{tid}/replies', {'body': 'secret reply'}), 201)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            for i in range(7):
+                db.execute("INSERT INTO posts(thread_id,user_id,body,status) VALUES (?,?,?,'approved')", (tid, self.ids['normal'], f'Reply {i}'))
+        db.close()
+        sections = self.ok(self.guest.get('/api/sections'))
+        items = sections[0]['recent_posts']
+        self.assertEqual([p['excerpt'] for p in items], [f'Reply {i}' for i in range(6,1,-1)])
+        self.assertTrue(all(p['is_root'] == 0 and p['status'] == 'approved' for p in items))
+        second = self.ok(self.admin.post('/api/sections', {'slug': 'second', 'title': 'Second'}), 201)['id']
+        other = self.topic(section_id=second)
+        self.assertEqual(self.ok(self.guest.get('/api/sections'))[1]['recent_posts'][0]['id'], other['post_id'])
+        latest = self.ok(self.normal.post(f'/api/threads/{tid}/replies', {'body': 'hidden-newest'}), 201)
+        self.assertNotIn(latest['post_id'], [p['id'] for p in self.ok(self.normal.get('/api/sections'))[0]['recent_posts']])
+        for client in [self.mod, self.admin]:
+            self.assertEqual(self.ok(client.get('/api/sections'))[0]['recent_posts'][0]['id'], latest['post_id'])
+        self.moderate(root['post_id'], 'unapprove')
+        self.assertEqual(self.ok(self.guest.get('/api/sections'))[0]['recent_posts'], [])
+        self.moderate(root['post_id'], 'reject')
+        self.assertEqual(self.ok(self.mod.get('/api/sections'))[0]['recent_posts'], [])
+
+    def test_sections_recent_reply_page_and_role_revocation(self):
+        root = self.topic()
+        tid = root['thread_id']
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            for i in range(21):
+                db.execute("INSERT INTO posts(thread_id,body,status) VALUES (?,?,'approved')", (tid, f'Visible {i}'))
+        db.close()
+        item = self.ok(self.guest.get('/api/sections'))[0]['recent_posts'][0]
+        self.assertIn('&page=2#post-', item['url'])
+        self.assertEqual(self.ok(self.guest.get(f'/api/threads/{tid}?page=2'))['replies']['items'][0]['id'], item['id'])
+        pending = self.topic(self.normal)
+        self.assertEqual(self.ok(self.mod.get('/api/sections'))[0]['recent_posts'][0]['id'], pending['post_id'])
+        self.ok(self.admin.post(f'/api/users/{self.ids["moderator"]}/role', {'role': 'user'}))
+        self.assertNotIn(pending['post_id'], [p['id'] for p in self.ok(self.mod.get('/api/sections'))[0]['recent_posts']])
 
     def test_attachments_visibility_spoiler_and_parent(self):
         content = b'ForBirds private attachment\n'

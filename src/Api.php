@@ -32,6 +32,9 @@ final class Api
 
     public function dispatch(string $method, string $path): mixed
     {
+        if ($method === 'HEAD' && preg_match('~^/api/attachments/([1-9][0-9]*)/(download|preview|view)$~D', $path, $m)) {
+            $this->attachment((int) $m[1], $m[2]);
+        }
         if (!in_array($method, ['GET', 'POST'], true)) {
             throw new ApiError(405, 'method_not_allowed', 'Используйте GET или POST.');
         }
@@ -58,7 +61,7 @@ final class Api
                 return array_values($this->flags->all());
             }
             if ($path === '/api/sections') {
-                return $this->all('SELECT * FROM sections ORDER BY id');
+                return $this->sectionsWithRecentPosts();
             }
             if ($path === '/api/threads') {
                 return $this->listThreads();
@@ -354,6 +357,43 @@ final class Api
         return $data;
     }
 
+    private function sectionsWithRecentPosts(): array
+    {
+        $sections = $this->all('SELECT * FROM sections ORDER BY id');
+        $statuses = $this->isStaff() ? "('approved','pending')" : "('approved')";
+        // Links must count the same visible replies as the destination thread page.
+        $replyVisibility = "r.status = 'approved'";
+        if ($this->isStaff()) {
+            $replyVisibility = '1 = 1';
+        } elseif ($this->user) {
+            $viewer = (int) $this->user['id'];
+            $replyVisibility = "(r.status = 'approved' OR (r.status = 'pending' AND r.user_id = $viewer))";
+        }
+        $recent = $this->all("WITH recent AS (
+            SELECT p.id, p.thread_id, p.is_root, p.status, p.created_at, substr(p.body,1,100) AS excerpt,
+                t.section_id, t.title, u.username,
+                row_number() OVER (PARTITION BY t.section_id ORDER BY p.id DESC) AS position
+            FROM posts p JOIN threads t ON t.id = p.thread_id
+            JOIN posts root ON root.thread_id = t.id AND root.is_root = 1
+            LEFT JOIN users u ON u.id = p.user_id
+            WHERE p.status IN $statuses AND root.status IN $statuses
+        ) SELECT recent.*, (SELECT count(*) FROM posts r
+            WHERE r.thread_id = recent.thread_id AND r.is_root = 0 AND r.id < recent.id
+                AND ($replyVisibility)) AS preceding_replies
+            FROM recent WHERE position <= 5 ORDER BY section_id, id DESC");
+        $bySection = [];
+        foreach ($recent as $item) {
+            $page = $item['is_root'] ? 1 : 1 + intdiv((int) $item['preceding_replies'], 20);
+            $item['url'] = '/post.html?id=' . $item['thread_id'] . '&page=' . $page . '#post-' . $item['id'];
+            unset($item['position'], $item['preceding_replies']);
+            $bySection[$item['section_id']][] = $item;
+        }
+        foreach ($sections as &$section) {
+            $section['recent_posts'] = $bySection[$section['id']] ?? [];
+        }
+        return $sections;
+    }
+
     private function createSection(): array
     {
         $actor = $this->requireAdmin();
@@ -634,7 +674,8 @@ final class Api
             $base = '/api/attachments/' . $file['id'];
             $file['download_url'] = $base . '/download';
             $file['is_image'] = ImagePreview::isImage($file['mime_type']);
-            $file['view_url'] = $file['is_image'] ? $base . '/view' : null;
+            $file['is_video'] = MediaFile::isVideo($file['mime_type']);
+            $file['view_url'] = ($file['is_image'] || $file['is_video']) ? $base . '/view' : null;
             $file['preview_url'] = $file['is_image'] ? $base . '/preview' : null;
         }
         return $post;
@@ -667,6 +708,7 @@ final class Api
             'image/jpeg' => ['jpg', 'jpeg'], 'image/png' => ['png'], 'image/gif' => ['gif'],
             'image/webp' => ['webp'], 'text/plain' => ['txt'], 'application/pdf' => ['pdf'],
             'application/zip' => ['zip'], 'application/x-zip' => ['zip'],
+            'video/mp4' => ['mp4'], 'video/webm' => ['webm'],
         ];
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         foreach ($input['name'] as $i => $name) {
@@ -721,7 +763,8 @@ final class Api
         if (!is_file($path)) {
             $this->notFound();
         }
-        if ($variant !== 'download' && !ImagePreview::isImage($file['mime_type'])) {
+        if (($variant === 'preview' && !ImagePreview::isImage($file['mime_type']))
+            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']))) {
             $this->notFound();
         }
         session_write_close();
@@ -738,13 +781,9 @@ final class Api
             $disposition = 'inline';
         }
         if ($variant !== 'download') {
-            header("Content-Security-Policy: default-src 'none'; img-src 'self'; frame-ancestors 'none'");
+            header("Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; frame-ancestors 'none'");
         }
-        header('Content-Type: ' . $mime);
-        header('Content-Length: ' . filesize($path));
-        header("Content-Disposition: $disposition; filename=\"image\"; filename*=UTF-8''" . rawurlencode($name));
-        readfile($path);
-        exit;
+        MediaFile::send($path, $mime, $disposition, $name);
     }
 
     private function publicUser(?array $user, bool $private = false): ?array

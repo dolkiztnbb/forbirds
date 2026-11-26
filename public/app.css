@@ -172,3 +172,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 #language-dialog h2 { font-size: 1.1rem; margin: 0 0 1rem; }
 #language-dialog button { margin: .25rem; padding: .5rem; }
 #language-switch { margin: .25rem; }
+
+/* Review/deletion states remain staff/author-only according to server visibility. */
+.post-table[data-status=pending], .post-table[data-status=deleted] {
+  opacity: .65;
+  background-color: #fff3a8;
+}
+.post-table[data-status=pending] td, .post-table[data-status=deleted] td { background-color: #fff3a8; }
+.profile-posts-table tr[data-status=pending], .profile-posts-table tr[data-status=deleted] { background: #fff3a8; opacity: .65; }
+.privacy-notice { margin: 5px; font-size: 11px; color: #444; }
+.privacy-notice p { max-width: 70rem; }
+.post-identity { display: block; font-size: 10px; overflow-wrap: anywhere; margin-top: 5px; }
+.post-identity:empty, .file-tools:empty { display: none; }
+.post-identity button, .file-tools button { font-size: 10px; max-width: 100%; }
+.file-tools { border-bottom: 1px dashed #888; padding-bottom: 4px; }
+.post-table[data-restricted="1"] { opacity: .65; }
+.post-table[data-restricted="1"] td { background-color: #fff3a8; }
+#profile-locks { color: #7a4b00; font-size: 12px; }
+
+.profile-posts-table tr[data-restricted="1"] { background: #fff3a8; opacity: .65; }
+
+.audio-box { box-sizing: border-box; display: inline-block; vertical-align: top; width: 340px; max-width: 100%; padding: 5px; margin: 2px; border: 1px solid #888; background: #d5d8d8; overflow-wrap: anywhere; }
+.attachment-audio { display: block; width: 100%; margin: 5px 0; }
+.audio-help { font-size: 12px; }
+.post-body .quote-green { color: #397b28; }
+.post-body .quote-orange { color: #b65300; }
+.post-body .quote-blue { color: #1682b1; }
+
+.quote-help { display: block; overflow-wrap: anywhere; }

@@ -18,6 +18,8 @@ final class ApiError extends RuntimeException
 
 final class Api
 {
+    use ModerationTools;
+    private AbuseIdentity $identity;
     private ?array $user;
     private array $input = [];
     private FlagCatalog $flags;
@@ -25,6 +27,7 @@ final class Api
     public function __construct(private PDO $db, private array $config)
     {
         $this->flags = new FlagCatalog();
+        $this->identity = new AbuseIdentity($db, $config);
         // Reload permissions on every request: bans and trust revocation apply to existing sessions.
         $this->user = isset($_SESSION['user_id'])
             ? $this->one('SELECT * FROM users WHERE id = ?', [$_SESSION['user_id']]) : null;
@@ -45,14 +48,17 @@ final class Api
             }
             $this->input = $this->readInput();
             $this->rateLimit('write', 120, 60);
+            if (!$this->isStaff() && !in_array($path, ['/api/auth/login', '/api/auth/logout'], true)) $this->identity->assertAllowed();
             if ($this->user && $this->user['is_banned'] && $path !== '/api/auth/logout') {
                 throw new ApiError(403, 'banned', 'Аккаунт заблокирован.');
             }
         }
 
         if ($method === 'GET') {
+            $extra = $this->moderationGet($path);
+            if ($extra !== null) return $extra;
             if ($path === '/api/session') {
-                return ['csrf_token' => $_SESSION['csrf'], 'user' => $this->publicUser($this->user, true)];
+                return ['csrf_token' => $_SESSION['csrf'], 'user' => $this->publicUser($this->user, true), 'privacy_enabled' => $this->privacyEnabled()];
             }
             if ($path === '/api/posting-status') {
                 return (new PostingGuard($this->db, $this->config, $this->user))->status();
@@ -68,7 +74,7 @@ final class Api
             }
             if ($path === '/api/me/posts') {
                 $user = $this->requireUser();
-                return $this->page('SELECT p.* FROM posts p WHERE p.user_id = ? ORDER BY p.id DESC', [$user['id']]);
+                return $this->page('SELECT p.* FROM posts p JOIN posts root ON root.thread_id=p.thread_id AND root.is_root=1 WHERE p.user_id = ? AND ' . $this->unrestrictedSql('p') . ' AND ' . $this->unrestrictedSql('root') . ' ORDER BY p.id DESC', [$user['id']]);
             }
             if ($path === '/api/moderation/queue') {
                 $this->requireStaff();
@@ -103,6 +109,8 @@ final class Api
                 $this->attachment((int) $m[1], $m[2]);
             }
         } else {
+            $extra = $this->moderationPost($path);
+            if ($extra !== null) return $extra;
             if ($path === '/api/pow/challenge') {
                 $this->rateLimit('pow', 20, 60);
                 return (new PostingGuard($this->db, $this->config, $this->user))->issue();
@@ -253,6 +261,7 @@ final class Api
         if (!is_file($path)) {
             $this->notFound();
         }
+        if ((new MediaBans($this->db))->matches(MediaBans::hashes($path, 'image/jpeg'))) $this->notFound();
         session_write_close();
         header('Content-Type: image/jpeg');
         header('Content-Length: ' . filesize($path));
@@ -265,7 +274,7 @@ final class Api
     {
         $actor = $this->requireUser();
         $description = array_key_exists('description', $this->input)
-            ? $this->text('description', 0, 4000) : $actor['description'];
+            ? $this->text('description', 0, 4000) : null;
         $flag = null;
         $changeFlag = array_key_exists('flag_file', $this->input);
         if ($changeFlag) {
@@ -281,8 +290,12 @@ final class Api
         }
         $file = $_FILES['avatar'] ?? null;
         $name = null;
+        if ($actor['avatar_locked'] && ($remove || ($file && ($file['error'] ?? null) !== UPLOAD_ERR_NO_FILE))) {
+            throw new ApiError(403, 'profile_locked', 'Изменение этого поля профиля заблокировано модератором.');
+        }
         $previews = new ImagePreview($this->config['storage'], 'avatars');
         if ($file && ($file['error'] ?? null) !== UPLOAD_ERR_NO_FILE) {
+            $this->rateLimit('avatar', 10, 60);
             if (!is_int($file['error'] ?? null) || $file['error'] !== UPLOAD_ERR_OK
                 || !is_string($file['tmp_name'] ?? null) || !is_uploaded_file($file['tmp_name'])) {
                 $this->invalid('Не удалось загрузить аватарку. Выберите один файл.');
@@ -298,6 +311,7 @@ final class Api
             if (!ImagePreview::isImage($mime)) {
                 $this->invalid('Аватарка: JPEG, PNG, GIF или WebP.');
             }
+            (new MediaBans($this->db))->check(MediaBans::hashes($file['tmp_name'], $mime));
             $name = bin2hex(random_bytes(24));
             $previews->ensure($file['tmp_name'], $name, $mime);
         }
@@ -305,11 +319,22 @@ final class Api
         try {
             $result = $this->transaction(function () use ($actor, $description, $remove, $name, $flag, $changeFlag, &$old) {
                 // Read the latest avatar inside the transaction, not the potentially stale session snapshot.
+                if ($name) (new MediaBans($this->db))->check(MediaBans::hashes((new ImagePreview($this->config['storage'], 'avatars'))->path($name), 'image/jpeg'));
                 $current = $this->one('SELECT * FROM users WHERE id = ?', [$actor['id']]);
+                if (($name || $remove) && $current['avatar_locked']) {
+                    throw new ApiError(403, 'profile_locked', 'Изменение этого поля профиля заблокировано модератором.');
+                }
+                $nextDescription = $description ?? $current['description'];
+                if ($current['description_locked'] && $nextDescription !== $current['description']) {
+                    throw new ApiError(403, 'profile_locked', 'Изменение этого поля профиля заблокировано модератором.');
+                }
+                if ($description !== null && TextBans::matches($this->db, $description)) {
+                    throw new ApiError(422, 'description_banned', 'Такое описание профиля запрещено.');
+                }
                 $old = $current['avatar_name'];
                 $avatar = $name ?? ($remove ? null : $old);
                 $this->run('UPDATE users SET description = ?, avatar_name = ?, flag_file = ? WHERE id = ?',
-                    [$description, $avatar, $changeFlag ? $flag : $current['flag_file'], $actor['id']]);
+                    [$nextDescription, $avatar, $changeFlag ? $flag : $current['flag_file'], $actor['id']]);
                 return $this->one('SELECT * FROM users WHERE id = ?', [$actor['id']]);
             });
         } catch (Throwable $e) {
@@ -339,10 +364,10 @@ final class Api
             $viewer = (int) $this->user['id'];
             $visible = static fn (string $alias): string => "($alias.status = 'approved' OR ($alias.status = 'pending' AND $alias.user_id = $viewer))";
         }
-        $postVisible = $visible('p');
-        $rootVisible = $visible('root');
-        $replyVisible = $visible('r');
-        $data = $this->page("SELECT p.id, p.thread_id, p.is_root, p.status, p.created_at,
+        $postVisible = '(' . $visible('p') . ') AND ' . $this->unrestrictedSql('p');
+        $rootVisible = '(' . $visible('root') . ') AND ' . $this->unrestrictedSql('root');
+        $replyVisible = '(' . $visible('r') . ') AND ' . $this->unrestrictedSql('r');
+        $data = $this->page("SELECT p.id, p.thread_id, p.is_root, p.status, p.is_hidden, p.is_blocked, p.created_at,
             substr(p.body, 1, 180) AS excerpt, t.title, t.section_id,
             (SELECT count(*) FROM posts r WHERE r.thread_id = p.thread_id AND r.is_root = 0
                 AND r.id < p.id AND ($replyVisible)) AS preceding_replies
@@ -369,6 +394,8 @@ final class Api
             $viewer = (int) $this->user['id'];
             $replyVisibility = "(r.status = 'approved' OR (r.status = 'pending' AND r.user_id = $viewer))";
         }
+        $replyVisibility = '(' . $replyVisibility . ') AND ' . $this->unrestrictedSql('r');
+        $recentVisibility = $this->unrestrictedSql('p') . ' AND ' . $this->unrestrictedSql('root');
         $recent = $this->all("WITH recent AS (
             SELECT p.id, p.thread_id, p.is_root, p.status, p.created_at, substr(p.body,1,100) AS excerpt,
                 t.section_id, t.title, u.username,
@@ -376,7 +403,7 @@ final class Api
             FROM posts p JOIN threads t ON t.id = p.thread_id
             JOIN posts root ON root.thread_id = t.id AND root.is_root = 1
             LEFT JOIN users u ON u.id = p.user_id
-            WHERE p.status IN $statuses AND root.status IN $statuses
+            WHERE p.status IN $statuses AND root.status IN $statuses AND $recentVisibility
         ) SELECT recent.*, (SELECT count(*) FROM posts r
             WHERE r.thread_id = recent.thread_id AND r.is_root = 0 AND r.id < recent.id
                 AND ($replyVisibility)) AS preceding_replies
@@ -419,7 +446,9 @@ final class Api
     {
         // Visibility is derived from current server-side permissions, never from a client flag.
         $statuses = $this->isStaff() ? "('approved','pending')" : "('approved')";
-        $where = ["p.status IN $statuses"];
+        $where = ["p.status IN $statuses", $this->unrestrictedSql('p')];
+        $searchVisible = $this->unrestrictedSql('search_post');
+        $replyVisible = $this->unrestrictedSql('r');
         $params = [];
         if (isset($_GET['section_id'])) {
             $where[] = 't.section_id = ?';
@@ -439,15 +468,15 @@ final class Api
             }
             $where[] = "(instr(unicode_lower(t.title), unicode_lower(?)) > 0 OR EXISTS (
                 SELECT 1 FROM posts search_post WHERE search_post.thread_id = t.id
-                AND search_post.status IN $statuses AND instr(unicode_lower(search_post.body), unicode_lower(?)) > 0))";
+                AND search_post.status IN $statuses AND $searchVisible AND instr(unicode_lower(search_post.body), unicode_lower(?)) > 0))";
             array_push($params, $_GET['q'], $_GET['q']);
         }
         $pendingCount = $this->isStaff()
             ? "(SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status = 'pending')" : '0';
-        $order = $this->isStaff()
-            ? "(p.status = 'pending') DESC, (pending_reply_count > 0) DESC, t.id DESC" : 't.id DESC';
+        $bumpOrder = "(SELECT coalesce(max(bp.bump_order),0) FROM posts bp WHERE bp.thread_id=t.id AND bp.status='approved' AND bp.is_hidden=0 AND bp.is_blocked=0) DESC, t.id DESC";
+        $order = ($this->isStaff() ? "(p.status = 'pending') DESC, (pending_reply_count > 0) DESC, " : '') . $bumpOrder;
         return $this->page("SELECT t.*, p.id AS post_id, p.body, p.user_id, p.status, u.username,
-            (SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status IN $statuses) AS reply_count,
+            (SELECT count(*) FROM posts r WHERE r.thread_id = t.id AND r.is_root = 0 AND r.status IN $statuses AND $replyVisible) AS reply_count,
             $pendingCount AS pending_reply_count
             FROM threads t JOIN posts p ON p.thread_id = t.id AND p.is_root = 1
             LEFT JOIN users u ON u.id = p.user_id WHERE " . implode(' AND ', $where) . ' ORDER BY ' . $order, $params);
@@ -469,6 +498,7 @@ final class Api
             $condition = "(p.status = 'approved' OR (p.status = 'pending' AND p.user_id = ?))";
             $params[] = $this->user['id'];
         }
+        $condition = "($condition) AND " . $this->unrestrictedSql('p');
         $replies = $this->page("SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned, u.avatar_name AS author_avatar_name, u.flag_file AS author_flag_file
             FROM posts p LEFT JOIN users u ON u.id = p.user_id
             WHERE p.thread_id = ? AND p.is_root = 0 AND $condition ORDER BY p.id", $params);
@@ -488,10 +518,11 @@ final class Api
         if (($news || $featured) && !$this->isStaff()) {
             throw new ApiError(403, 'forbidden', 'Размещение на главной и в новостях доступно персоналу.');
         }
+        $sage = $threadId !== null && $this->boolean('sage', false);
         $files = $this->validateFiles();
         $moved = [];
         try {
-            return $this->transaction(function () use ($threadId, $body, $title, $sectionId, $news, $featured, $files, &$moved) {
+            return $this->transaction(function () use ($threadId, $body, $title, $sectionId, $news, $featured, $files, $sage, &$moved) {
                 (new PostingGuard($this->db, $this->config, $this->user))->consume($this->input);
                 $isRoot = $threadId === null;
                 if ($isRoot) {
@@ -521,11 +552,16 @@ final class Api
                     $threadId = (int) $this->db->lastInsertId();
                 }
                 $status = $this->isStaff() || ($this->user && $this->user['auto_approve']) ? 'approved' : 'pending';
-                $this->run('INSERT INTO posts(thread_id,user_id,is_root,body,status) VALUES (?,?,?,?,?)', [
-                    $threadId, $this->user['id'] ?? null, (int) $isRoot, $body, $status,
+                $this->run('INSERT INTO posts(thread_id,user_id,is_root,body,status,sage,bump_order,author_ip,browser_id,fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?)', [
+                    $threadId, $this->user['id'] ?? null, (int) $isRoot, $body, $status, (int) $sage,
+                    $status === 'approved' && !$sage ? (int) $this->one('SELECT coalesce(max(bump_order),0)+1 AS n FROM posts')['n'] : 0,
+                    $this->identity->ip, $this->identity->browser, $this->identity->fingerprint,
                 ]);
                 $id = (int) $this->db->lastInsertId();
                 foreach ($files as $file) {
+                    // Decode and screen only after a valid proof and cooldown check.
+                    $file += MediaBans::hashes($file['tmp_name'], $file['mime']);
+                    (new MediaBans($this->db))->check($file);
                     $name = bin2hex(random_bytes(24));
                     $destination = $this->config['storage'] . '/uploads/' . $name;
                     if (!move_uploaded_file($file['tmp_name'], $destination)) {
@@ -538,8 +574,9 @@ final class Api
                         $moved[] = $previews->path($name);
                         $previews->ensure($destination, $name, $file['mime']);
                     }
-                    $this->run('INSERT INTO attachments(post_id,storage_name,original_name,mime_type,byte_size,spoiler) VALUES (?,?,?,?,?,?)', [
+                    $this->run('INSERT INTO attachments(post_id,storage_name,original_name,mime_type,byte_size,spoiler,sha256,dhash,ahash) VALUES (?,?,?,?,?,?,?,?,?)', [
                         $id, $name, $file['name'], $file['mime'], $file['size'], (int) $file['spoiler'],
+                        $file['sha256'], $file['dhash'], $file['ahash'],
                     ]);
                 }
                 http_response_code(201);
@@ -573,6 +610,10 @@ final class Api
                 throw new ApiError(409, 'post_deleted', 'Удалённое сообщение нельзя восстановить через API.');
             }
             $status = $statuses[$action];
+            if ($status === 'approved' && $post['is_blocked']) throw new ApiError(409, 'post_blocked', 'Сначала разблокируйте сообщение.');
+            if ($status === 'approved' && $post['status'] !== 'approved' && !$post['sage']) {
+                $this->run('UPDATE posts SET bump_order = (SELECT coalesce(max(bump_order),0)+1 FROM posts) WHERE id = ?', [$id]);
+            }
             $this->run("UPDATE posts SET status = ?, moderated_by = ?, moderated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?", [$status, $actor['id'], $id]);
             $this->audit($actor['id'], 'post.' . $action, 'post', $id, ['from' => $post['status'], 'to' => $status, 'reason' => $reason]);
             return ['post_id' => $id, 'status' => $status];
@@ -658,10 +699,15 @@ final class Api
         return $post;
     }
 
+    private function unrestrictedSql(string $alias): string
+    {
+        return $this->isStaff() ? '1=1' : "($alias.is_hidden=0 AND $alias.is_blocked=0)";
+    }
+
     private function canSee(array $post): bool
     {
-        return $post['status'] === 'approved' || ($post['status'] === 'pending' && $this->user
-            && (int) $post['user_id'] === (int) $this->user['id']);
+        return !$post['is_hidden'] && !$post['is_blocked'] && ($post['status'] === 'approved' || ($post['status'] === 'pending' && $this->user
+            && (int) $post['user_id'] === (int) $this->user['id']));
     }
 
     private function postWithAttachments(array $post): array
@@ -669,14 +715,22 @@ final class Api
         $post['avatar_url'] = $this->avatarUrl($post['user_id'] ?? null, $post['author_avatar_name'] ?? null);
         $post['flag'] = $this->flags->find($post['author_flag_file'] ?? null);
         unset($post['moderated_by'], $post['author_avatar_name'], $post['author_flag_file']);
-        $post['attachments'] = $this->all('SELECT id, original_name, mime_type, byte_size, spoiler FROM attachments WHERE post_id = ? ORDER BY id', [$post['id']]);
-        foreach ($post['attachments'] as &$file) {
+        $post['attachments'] = [];
+        foreach ($this->all('SELECT * FROM attachments WHERE post_id = ? ORDER BY id', [$post['id']]) as $stored) {
+            $stored = $this->indexedAttachment($stored);
+            $blocked = $stored['sha256'] && (new MediaBans($this->db))->matches($stored);
+            $available = $stored['moderation_state'] === 'visible' && !$blocked;
+            if (!$available && !$this->isStaff()) continue;
+            $file = array_intersect_key($stored, array_flip(['id','original_name','mime_type','byte_size','spoiler','moderation_state']));
+            $file['blocked'] = (bool) $blocked;
             $base = '/api/attachments/' . $file['id'];
-            $file['download_url'] = $base . '/download';
+            $file['download_url'] = $available ? $base . '/download' : null;
             $file['is_image'] = ImagePreview::isImage($file['mime_type']);
-            $file['is_video'] = MediaFile::isVideo($file['mime_type']);
-            $file['view_url'] = ($file['is_image'] || $file['is_video']) ? $base . '/view' : null;
-            $file['preview_url'] = $file['is_image'] ? $base . '/preview' : null;
+            $file['is_audio'] = MediaFile::isAudio($file['mime_type'], $file['original_name']);
+            $file['is_video'] = !$file['is_audio'] && MediaFile::isVideo($file['mime_type']);
+            $file['view_url'] = $available && ($file['is_image'] || $file['is_video'] || $file['is_audio']) ? $base . '/view' : null;
+            $file['preview_url'] = $available && $file['is_image'] ? $base . '/preview' : null;
+            $post['attachments'][] = $file;
         }
         return $post;
     }
@@ -710,6 +764,9 @@ final class Api
             'application/zip' => ['zip'], 'application/x-zip' => ['zip'],
             'video/mp4' => ['mp4'], 'video/webm' => ['webm'],
         ];
+        foreach (MediaFile::AUDIO_TYPES as $mime => $extensions) {
+            $allowed[$mime] = array_merge($allowed[$mime] ?? [], $extensions);
+        }
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         foreach ($input['name'] as $i => $name) {
             $error = $input['error'][$i] ?? UPLOAD_ERR_NO_FILE;
@@ -759,12 +816,14 @@ final class Api
             $this->notFound();
         }
         $this->visiblePost((int) $file['post_id']);
+        $file = $this->indexedAttachment($file);
+        if ($file['moderation_state'] !== 'visible' || ($file['sha256'] && (new MediaBans($this->db))->matches($file))) $this->notFound();
         $path = $this->config['storage'] . '/uploads/' . $file['storage_name'];
         if (!is_file($path)) {
             $this->notFound();
         }
         if (($variant === 'preview' && !ImagePreview::isImage($file['mime_type']))
-            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']))) {
+            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']) && !MediaFile::isAudio($file['mime_type'], $file['original_name']))) {
             $this->notFound();
         }
         session_write_close();
@@ -777,7 +836,7 @@ final class Api
             $disposition = 'inline';
             $name = 'preview.jpg';
         } elseif ($variant === 'view') {
-            $mime = $file['mime_type'];
+            $mime = MediaFile::playbackMime($file['mime_type'], $file['original_name']);
             $disposition = 'inline';
         }
         if ($variant !== 'download') {
@@ -791,11 +850,14 @@ final class Api
         if (!$user) {
             return null;
         }
+        if (TextBans::matches($this->db, $user['description'])) $user['description'] = '';
         $user['avatar_url'] = $this->avatarUrl($user['id'], $user['avatar_name'] ?? null);
         $user['flag'] = $this->flags->find($user['flag_file'] ?? null);
         $keys = ['id', 'username', 'role', 'is_banned', 'created_at', 'description', 'avatar_url', 'flag'];
         if ($private) {
             $keys[] = 'auto_approve';
+            $keys[] = 'avatar_locked';
+            $keys[] = 'description_locked';
         }
         return array_intersect_key($user, array_flip($keys));
     }

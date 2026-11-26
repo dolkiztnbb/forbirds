@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -122,7 +123,19 @@ class ApiTests(unittest.TestCase):
             imagepng($im,$dir.'wide.png'); imagejpeg($im,$dir.'wide.jpg');
             imagegif($im,$dir.'wide.gif'); imagewebp($im,$dir.'wide.webp');
             $im = imagecreatetruecolor(80,640); imagepng($im,$dir.'portrait.png');
-            $im = imagecreatetruecolor(32,16); imagepng($im,$dir.'small.png');'''
+            $im = imagecreatetruecolor(32,16); imagepng($im,$dir.'small.png');
+            $im = imagecreatetruecolor(128,128);
+            for ($y=0;$y<128;$y++) for ($x=0;$x<128;$x++) {
+                imagesetpixel($im,$x,$y,imagecolorallocate($im,($x*19+$y*3)%256,($x*5+$y*13)%256,($x*$y)%256));
+            }
+            imagepng($im,$dir.'pattern.png');
+            imagesetpixel($im,50,60,imagecolorallocate($im,255,255,255));
+            imagepng($im,$dir.'pixel.png');
+            $im = imagecreatetruecolor(128,128);
+            for ($y=0;$y<128;$y++) for ($x=0;$x<128;$x++) {
+                imagesetpixel($im,$x,$y,imagecolorallocate($im,($x*7)%256,($y*5)%256,($x+$y)%256));
+            }
+            imagepng($im,$dir.'other.png');'''
         result = subprocess.run(cls.php + ['-r', fixture_code], cwd=ROOT, env=cls.env,
                                 text=True, capture_output=True, timeout=30)
         if result.returncode:
@@ -133,7 +146,7 @@ class ApiTests(unittest.TestCase):
         delay = b'\x21\xf9\x04\x00\x0a\x00\x00\x00'
         animation = b'GIF89a' + gif[6:table_end] + b'\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00' + delay + frame + delay + frame + b'\x3b'
         (cls.fixtures / 'animated.gif').write_bytes(animation)
-        for filename in ['sample.mp4', 'sample.webm']:
+        for filename in [p.name for p in (ROOT / 'tests/fixtures').glob('sample.*')]:
             (cls.fixtures / filename).write_bytes((ROOT / 'tests' / 'fixtures' / filename).read_bytes())
         with socket.socket() as sock:
             sock.bind(('0.0.0.0', 0))
@@ -189,9 +202,9 @@ class ApiTests(unittest.TestCase):
 
     def setUp(self):
         with sqlite3.connect(self.storage / 'forum.sqlite') as db:
-            for table in ['attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
+            for table in ['description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
                 db.execute(f'DELETE FROM {table}')
-            db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL")
+            db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL, avatar_locked = 0, description_locked = 0")
             db.execute("UPDATE users SET role = 'user', auto_approve = 0, is_banned = 0 WHERE role != 'admin'")
             db.execute("UPDATE users SET role = 'moderator' WHERE username = 'moderator'")
         db.close()
@@ -240,7 +253,7 @@ class ApiTests(unittest.TestCase):
             row = db.execute('SELECT username,password_hash,role,auto_approve,description,avatar_name,flag_file FROM users').fetchone()
             self.assertEqual(row, ('old_user', 'unchanged-hash', 'moderator', 1, '', None, None))
             self.assertEqual(db.execute('SELECT body FROM posts').fetchone()[0], 'Old post')
-            self.assertEqual(db.execute('SELECT count(*) FROM migrations').fetchone()[0], 4)
+            self.assertEqual(db.execute('SELECT count(*) FROM migrations').fetchone()[0], len(list((ROOT / 'database/migrations').glob('*.sql'))))
         db.close()
 
     def test_flag_catalog_dictionary_fallback_and_safe_autodiscovery(self):
@@ -606,6 +619,81 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(self.ok(self.guest.get('/api/threads?limit=1&page=2'))['items']), 1)
         self.ok(self.guest.get('/api/threads?page=0'), 422)
         self.ok(self.guest.get('/api/threads?section_id=1%20OR%201=1'), 422)
+
+    def test_audio_formats_inline_mime_and_bytes(self):
+        formats = {'mp3': 'audio/mpeg', 'mp2': 'audio/mpeg', 'flac': 'audio/flac',
+                   'wav': 'audio/wav', 'ogg': 'audio/ogg', 'opus': 'audio/ogg',
+                   'm4a': 'audio/mp4', 'aac': 'audio/aac', 'aiff': 'audio/x-aiff',
+                   'wma': 'audio/x-ms-wma', 'weba': 'audio/webm'}
+        entries = list(formats.items())
+        for batch in [entries[:6], entries[6:]]:
+            result = self.ok(self.admin.upload('/api/threads', {
+                'section_id': self.section, 'title': 'Audio formats', 'body': 'Audio',
+            }, [('sample.' + ext, (self.fixtures / ('sample.' + ext)).read_bytes()) for ext, _ in batch]), 201)
+            files = self.ok(self.guest.get(f'/api/posts/{result["post_id"]}'))['attachments']
+            self.assertEqual(len(files), len(batch))
+            for audio, (ext, mime) in zip(files, batch):
+                with self.subTest(ext=ext):
+                    self.assertTrue(audio['is_audio'])
+                    self.assertFalse(audio['is_video'])
+                    self.assertFalse(audio['is_image'])
+                    self.assertIsNone(audio['preview_url'])
+                    data = (self.fixtures / ('sample.' + ext)).read_bytes()
+                    response = self.guest.get(audio['view_url'])
+                    self.assertEqual(self.ok(response), data)
+                    self.assertEqual(response[2]['Content-Type'], mime)
+                    self.assertIn('inline;', response[2]['Content-Disposition'])
+                    self.assertIn('no-store', response[2]['Cache-Control'])
+                    self.assertEqual(self.ok(self.guest.request('GET', audio['view_url'], headers={'Range': 'bytes=0-15'}), 206), data[:16])
+                    download = self.guest.get(audio['download_url'])
+                    self.assertEqual(self.ok(download), data)
+                    self.assertEqual(download[2]['Content-Type'], 'application/octet-stream')
+                    self.ok(self.guest.get(f'/api/attachments/{audio["id"]}/preview'), 404)
+
+    def test_audio_visibility_ranges_moderation_and_quote_plain_text(self):
+        body = '> green\n< orange\n^ blue\n<script>window.XSS=true</script>\nplain > not a quote\n\nend'
+        data = (self.fixtures / 'sample.wav').read_bytes()
+        root = self.ok(self.normal.upload('/api/threads', {
+            'section_id': self.section, 'title': 'Audio protection', 'body': body, 'spoilers[]': '0',
+        }, [('sample.wav', data)]), 201)
+        post = self.ok(self.normal.get(f'/api/posts/{root["post_id"]}'))
+        self.assertEqual(post['body'], body)
+        audio = post['attachments'][0]
+        self.assertEqual(audio['spoiler'], 1)
+        url = audio['view_url']
+        for method, headers in [('GET', {}), ('HEAD', {}), ('GET', {'Range': 'bytes=0-15'})]:
+            self.ok(self.guest.request(method, url, headers=headers), 404)
+        self.moderate(root['post_id'])
+        head = self.guest.request('HEAD', url)
+        self.assertEqual(self.ok(head), b'')
+        self.assertEqual(int(head[2]['Content-Length']), len(data))
+        self.assertEqual(self.ok(self.guest.request('GET', url, headers={'Range': 'bytes=-12'}), 206), data[-12:])
+        self.ok(self.guest.request('GET', url, headers={'Range': 'bytes=99999999-'}), 416)
+        for action in ['hide', 'block']:
+            self.ok(self.mod.post(f'/api/posts/{root["post_id"]}/restrict', {'action': action, 'reason': 'Audio restriction'}))
+            self.ok(self.normal.request('GET', url, headers={'Range': 'bytes=0-15'}), 404)
+            self.ok(self.guest.request('HEAD', url), 404)
+            self.ok(self.mod.get(url))
+            self.ok(self.mod.post(f'/api/posts/{root["post_id"]}/restrict', {'action': 'un' + action if action == 'block' else 'unhide', 'reason': 'Restore'}))
+        reply = self.ok(self.admin.upload(f'/api/threads/{root["thread_id"]}/replies', {'body': 'Audio reply'}, [('sample.wav', data)]), 201)
+        reply_audio = self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['attachments'][0]
+        self.moderate(root['post_id'], 'unapprove')
+        self.ok(self.guest.get(reply_audio['view_url']), 404)
+        self.moderate(root['post_id'])
+        self.ok(self.mod.post(f'/api/attachments/{audio["id"]}/moderate', {'action': 'hide', 'reason': 'Audio file hidden'}))
+        self.ok(self.mod.get(url), 404)
+        self.ok(self.mod.post(f'/api/attachments/{reply_audio["id"]}/moderate', {'action': 'hashban', 'reason': 'Audio file banned'}))
+        self.ok(self.admin.get(reply_audio['view_url']), 404)
+        self.ok(self.normal.upload('/api/threads', {'section_id': self.section, 'title': 'Banned audio', 'body': 'no'}, [('renamed.wav', data)]), 422)
+
+    def test_audio_rejects_fake_content_and_mismatched_extensions(self):
+        fields = {'section_id': self.section, 'title': 'Fake audio', 'body': 'bad'}
+        for name, data in [('fake.mp3', b'<html>not music</html>'),
+                           ('fake.wav', (self.fixtures / 'wide.png').read_bytes()),
+                           ('fake.flac', (self.fixtures / 'sample.mp3').read_bytes()),
+                           ('fake.ogg', b'not an ogg container'),
+                           ('fake.html', (self.fixtures / 'sample.mp3').read_bytes())]:
+            self.ok(self.normal.upload('/api/threads', fields, [(name, data)]), 422)
 
     def video_post(self, filename='sample.webm', client=None):
         client = client or self.normal
@@ -1063,13 +1151,377 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.ok(self.guest.request('GET', path, headers={'Accept-Language': 'en'})),
                          self.ok(self.guest.get(path)))
 
+    def test_move_threads_replies_permissions_and_links(self):
+        a, b = self.topic(), self.topic(title='Destination')
+        reply = self.ok(self.mod.post(f'/api/threads/{a["thread_id"]}/replies', {'body': 'Moved reply'}), 201)
+        section = self.ok(self.admin.post('/api/sections', {'slug': 'other', 'title': 'Other'}), 201)['id']
+        route = f'/api/posts/{a["post_id"]}/move'
+        self.ok(self.normal.post(route, {'section_id': section, 'reason': 'test'}), 403)
+        self.ok(self.mod.post(route, {'section_id': section}), 422)
+        self.ok(self.mod.post(route, {'section_id': section, 'reason': 'Wrong section'}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/threads/{a["thread_id"]}'))['section_id'], section)
+        self.ok(self.mod.post(f'/api/posts/{reply["post_id"]}/move', {'thread_id': b['thread_id'], 'reason': 'Wrong thread'}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['thread_id'], b['thread_id'])
+        self.assertEqual(self.ok(self.guest.get(f'/api/threads/{a["thread_id"]}'))['replies']['items'], [])
+        self.ok(self.mod.post(route, {'section_id': '1 OR 1=1', 'reason': 'bad'}), 422)
+        self.ok(self.mod.post(f'/api/posts/{reply["post_id"]}/move', {'thread_id': b['thread_id'], 'reason': 'same'}), 422)
+        self.assertEqual(len([e for e in self.ok(self.mod.get('/api/moderation/audit'))['items'] if e['action'] == 'post.move']), 2)
+
+    def test_file_moderation_revokes_all_variants_and_purges(self):
+        fields = {'section_id': self.section, 'title': 'Files', 'body': 'Post remains'}
+        topic = self.ok(self.admin.upload('/api/threads', fields, [('wide.png', (self.fixtures / 'wide.png').read_bytes()), ('ok.txt', b'keep')]), 201)
+        route = f'/api/posts/{topic["post_id"]}'
+        file = self.ok(self.guest.get(route))['attachments'][0]
+        action = f'/api/attachments/{file["id"]}/moderate'
+        self.ok(self.normal.post(action, {'action': 'hide', 'reason': 'test'}), 403)
+        self.ok(self.mod.request('POST', action, data={'action': 'hide', 'reason': 'test'}, headers={'X-CSRF-Token': 'bad'}), 403)
+        for verb, state in [('spoiler', 1), ('unspoiler', 0)]:
+            self.ok(self.mod.post(action, {'action': verb, 'reason': 'test'}))
+            self.assertEqual(self.ok(self.guest.get(route))['attachments'][0]['spoiler'], state)
+        self.ok(self.mod.post(action, {'action': 'hide', 'reason': 'test'}))
+        self.assertEqual(len(self.ok(self.guest.get(route))['attachments']), 1)
+        staff_file = self.ok(self.mod.get(route))['attachments'][0]
+        self.assertEqual(staff_file['moderation_state'], 'hidden')
+        self.assertIsNone(staff_file['download_url'])
+        for url in [file['download_url'], file['preview_url'], file['view_url']]:
+            self.ok(self.guest.get(url), 404)
+            self.ok(self.mod.get(url), 404)
+            self.ok(self.mod.request('HEAD', url), 404)
+        self.ok(self.mod.post(action, {'action': 'show', 'reason': 'false positive'}))
+        self.ok(self.guest.get(file['preview_url']))
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            stored = db.execute('SELECT storage_name FROM attachments WHERE id=?', [file['id']]).fetchone()[0]
+        db.close()
+        self.ok(self.mod.post(action, {'action': 'delete', 'reason': 'remove permanently'}))
+        self.assertFalse((self.storage / 'uploads' / stored).exists())
+        self.assertFalse((self.storage / 'previews' / (stored + '.jpg')).exists())
+        self.ok(self.mod.post(action, {'action': 'show', 'reason': 'cannot restore'}), 409)
+        self.assertEqual(self.ok(self.guest.get(route))['body'], 'Post remains')
+        self.assertEqual(len(self.ok(self.guest.get(route))['attachments']), 1)
+
+    def test_media_bans_exact_one_pixel_legacy_and_avatars(self):
+        fields = {'section_id': self.section, 'title': 'Pattern', 'body': 'Synthetic fixture only'}
+        pattern = (self.fixtures / 'pattern.png').read_bytes()
+        pixel = (self.fixtures / 'pixel.png').read_bytes()
+        topic = self.ok(self.admin.upload('/api/threads', fields, [('pattern.png', pattern), ('pixel.png', pixel)]), 201)
+        files = self.ok(self.mod.get(f'/api/posts/{topic["post_id"]}'))['attachments']
+        # Simulate an attachment from before the migration: hashes are indexed lazily.
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute('UPDATE attachments SET sha256=NULL,dhash=NULL,ahash=NULL WHERE id=?', [files[1]['id']])
+        db.close()
+        self.ok(self.mod.post(f'/api/attachments/{files[0]["id"]}/moderate', {'action': 'hashban', 'reason': 'Synthetic test ban'}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/posts/{topic["post_id"]}'))['attachments'], [])
+        for file in files:
+            for key in ['download_url', 'view_url', 'preview_url']:
+                self.ok(self.guest.get(file[key]), 404)
+        for name, data in [('renamed.png', pattern), ('pixel.png', pixel)]:
+            response = self.normal.upload('/api/threads', fields, [(name, data)])
+            self.ok(response, 422)
+            self.assertEqual(response[1]['error']['code'], 'media_banned')
+        self.ok(self.normal.upload('/api/me/profile', {}, [('pixel.png', pixel)], file_field='avatar'), 422)
+        self.ok(self.normal.upload('/api/threads', fields, [('other.png', (self.fixtures / 'other.png').read_bytes())]), 201)
+        ban = self.ok(self.mod.get('/api/moderation/media-bans'))['items'][0]
+        self.ok(self.normal.post(f'/api/moderation/media-bans/{ban["id"]}/remove', {'reason': 'no'}), 403)
+        self.ok(self.mod.post(f'/api/moderation/media-bans/{ban["id"]}/remove', {'reason': 'False positive'}))
+        self.ok(self.guest.get(files[1]['download_url']))
+        self.ok(self.guest.get(files[0]['download_url']), 404)  # Hashban purged this original.
+
+    def offline_cli(self, command):
+        # Run maintenance against an offline snapshot, as recommended in deployment docs.
+        directory = tempfile.TemporaryDirectory(prefix='forbirds-cli-')
+        self.addCleanup(directory.cleanup)
+        target = Path(directory.name) / 'storage'
+        shutil.copytree(self.storage, target, ignore=shutil.ignore_patterns('forum.sqlite*', 'server.log'))
+        with sqlite3.connect(self.storage / 'forum.sqlite') as source, sqlite3.connect(target / 'forum.sqlite') as dest:
+            source.backup(dest)
+        source.close(); dest.close()
+        result = subprocess.run(self.php + ['bin/console.php', command], cwd=ROOT,
+                                env={**self.env, 'FORBIRDS_STORAGE': str(target)}, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return target
+
+    def test_exact_file_ban_survives_rename_and_purge_command(self):
+        fields = {'section_id': self.section, 'title': 'Text', 'body': 'test'}
+        topic = self.ok(self.admin.upload('/api/threads', fields, [('a.txt', b'Synthetic blocked bytes'), ('b.txt', b'Synthetic blocked bytes')]), 201)
+        files = self.ok(self.mod.get(f'/api/posts/{topic["post_id"]}'))['attachments']
+        self.ok(self.mod.post(f'/api/attachments/{files[0]["id"]}/moderate', {'action': 'hashban', 'reason': 'test'}))
+        self.ok(self.normal.upload('/api/threads', fields, [('renamed.txt', b'Synthetic blocked bytes')]), 422)
+        target = self.offline_cli('purge-banned-media')
+        with sqlite3.connect(target / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT moderation_state FROM attachments WHERE id=?', [files[1]['id']]).fetchone()[0], 'deleted')
+
+        db.close()
+    def test_identity_privacy_gate_and_no_feed_leak(self):
+        self.ok(self.admin.post('/api/moderation/privacy', {'enabled': False}))
+        fp = 'a' * 64
+        data = {'section_id': self.section, 'title': 'Identity', 'body': 'test', **self.normal.proof()}
+        topic = self.ok(self.normal.request('POST', '/api/threads', data=data, headers={'X-ForBirds-Fingerprint': fp, 'X-Forwarded-For': '1.2.3.4'}), 201)
+        route = f'/api/posts/{topic["post_id"]}/identity'
+        self.ok(self.admin.get(route), 403)
+        self.ok(self.mod.post('/api/moderation/privacy', {'enabled': True}), 403)
+        self.ok(self.normal.post('/api/moderation/privacy', {'enabled': True}), 403)
+        self.ok(self.admin.post('/api/moderation/privacy', {'enabled': True}))
+        identity = self.ok(self.admin.get(route))
+        self.assertEqual(identity['ip'], '127.0.0.1')
+        self.assertRegex(identity['cid'], '^[a-f0-9]{64}$')
+        self.assertRegex(identity['hid'], '^[a-f0-9]{64}$')
+        self.assertNotEqual(identity['hid'], fp)
+        self.ok(self.mod.get(route), 403)
+        for client in [self.normal, self.mod, self.admin]:
+            for path in [f'/api/posts/{topic["post_id"]}', '/api/threads', '/api/me/posts', '/api/moderation/queue']:
+                response = client.get(path)
+                serialized = json.dumps(response[1])
+                for forbidden in ['author_ip', 'browser_id', 'fingerprint', identity['cid'], identity['hid'], '127.0.0.1']:
+                    self.assertNotIn(forbidden, serialized)
+        self.ok(self.admin.post('/api/moderation/privacy', {'enabled': False}))
+        self.ok(self.admin.get(route), 403)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM privacy_access').fetchone()[0], 1)
+
+        db.close()
+    def test_identity_bans_browser_fingerprint_cidr_expiry_and_unban(self):
+        topic = self.topic(self.normal)
+        self.ok(self.admin.post('/api/moderation/privacy', {'enabled': True}))
+        ban = self.ok(self.admin.post('/api/moderation/identity-bans', {'kind': 'browser', 'post_id': topic['post_id'], 'hours': 24, 'reason': 'spam'}))
+        self.ok(self.normal.post('/api/pow/challenge', {}), 403)
+        self.ok(Client(self.base).post('/api/pow/challenge', {}))  # Cookie ID is not a hardware ID.
+        self.ok(self.admin.post(f'/api/moderation/identity-bans/{ban["id"]}/remove', {'reason': 'appeal'}))
+        fp = 'b' * 64
+        data = {'section_id': self.section, 'title': 'FP', 'body': 'test', **self.normal.proof(advance=True)}
+        topic = self.ok(self.normal.request('POST', '/api/threads', data=data, headers={'X-ForBirds-Fingerprint': fp}), 201)
+        ban = self.ok(self.admin.post('/api/moderation/identity-bans', {'kind': 'fingerprint', 'post_id': topic['post_id'], 'hours': 1, 'reason': 'spam'}))
+        other = Client(self.base)
+        self.ok(other.request('POST', '/api/pow/challenge', data={}, headers={'X-ForBirds-Fingerprint': fp}), 403)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute('UPDATE identity_bans SET expires_at=0')
+        db.close()
+        self.ok(other.request('POST', '/api/pow/challenge', data={}, headers={'X-ForBirds-Fingerprint': fp}))
+        self.ok(self.admin.post('/api/moderation/identity-bans', {'kind': 'cidr', 'value': '127.12.34.56/8', 'hours': 24, 'reason': 'network spam'}))
+        self.ok(self.guest.post('/api/pow/challenge', {}), 403)
+        self.ok(self.admin.post('/api/pow/challenge', {}))  # Staff recovery remains possible.
+        self.ok(self.admin.post('/api/moderation/identity-bans', {'kind': 'cidr', 'value': '1.2.3.4/999', 'hours': 24, 'reason': 'bad'}), 422)
+        bans = self.ok(self.admin.get('/api/moderation/identity-bans'))['items']
+        self.assertIn('127.0.0.0/8', [b['value'] for b in bans])
+
+    def test_bump_on_approval_sage_deletion_and_move(self):
+        first, second = self.topic(), self.topic(title='Second')
+        order = lambda: [item['id'] for item in self.ok(self.guest.get('/api/threads'))['items']]
+        self.assertEqual(order(), [second['thread_id'], first['thread_id']])
+        pending = self.ok(self.normal.post(f'/api/threads/{first["thread_id"]}/replies', {'body': 'Pending bump'}), 201)
+        self.assertEqual(order()[0], second['thread_id'])
+        self.moderate(pending['post_id'])
+        self.assertEqual(order()[0], first['thread_id'])
+        self.ok(self.mod.post(f'/api/threads/{second["thread_id"]}/replies', {'body': 'sage', 'sage': True}), 201)
+        self.assertEqual(order()[0], first['thread_id'])
+        self.moderate(pending['post_id'], 'unapprove')
+        self.assertEqual(order()[0], second['thread_id'])
+        self.moderate(pending['post_id'])
+        self.assertEqual(order()[0], first['thread_id'])
+        self.moderate(pending['post_id'], 'delete')
+        self.assertEqual(order()[0], second['thread_id'])
+        self.ok(self.guest.get('/api/moderation/archive'), 401)
+        archive = self.ok(self.mod.get('/api/moderation/archive'))['items']
+        self.assertEqual(archive[0]['id'], pending['post_id'])
+
+    def test_cidr_math_and_retention(self):
+        code = r'''require 'src/bootstrap.php';
+            $tests = [['192.0.2.99/24','192.0.2.0/24'],['2001:db8:abcd::1/32','2001:db8::/32'],['::1','::1/128']];
+            foreach ($tests as [$input,$expected]) if (ForBirds\AbuseIdentity::cidr($input) !== $expected) exit(2);
+            foreach ([['2001:db8::/32','2001:db8:123::1',true],['2001:db8::/32','2001:db9::1',false],
+                ['0.0.0.0/0','192.0.2.1',true],['127.0.0.0/8','::1',false]] as [$range,$ip,$expected]) {
+                if (ForBirds\AbuseIdentity::contains($range,$ip) !== $expected) exit(3);
+            }'''
+        result = subprocess.run(self.php + ['-r', code], cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        topic = self.topic(self.normal)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute("UPDATE posts SET created_at='2000-01-01T00:00:00Z'")
+        db.close()
+        target = self.offline_cli('prune-identities')
+        with sqlite3.connect(target / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT author_ip,browser_id,fingerprint FROM posts WHERE id=?', [topic['post_id']]).fetchone(), (None, None, None))
+
+        db.close()
+    def test_sqli_regression_payloads_are_literals_not_queries(self):
+        payload = "' OR 1=1; --"
+        response = self.guest.post('/api/auth/login', {'username': payload, 'password': PASSWORD})
+        self.ok(response, 401)
+        for key in ['section_id', 'page', 'limit']:
+            self.ok(self.guest.get('/api/threads?' + urllib.parse.urlencode({key: payload})), 422)
+        a = self.topic(title=payload, body="'); DROP TABLE users; --")
+        self.topic(title='Unrelated')
+        found = self.ok(self.guest.get('/api/threads?' + urllib.parse.urlencode({'q': payload})))['items']
+        self.assertEqual([t['id'] for t in found], [a['thread_id']])
+        self.assertEqual(self.ok(self.guest.get(f'/api/posts/{a["post_id"]}'))['body'], "'); DROP TABLE users; --")
+        self.ok(self.admin.get('/api/session'))
+
+
+    def test_profile_moderation_permissions_locks_and_clearing(self):
+        uid = self.ids['normal']
+        self.ok(self.normal.upload('/api/me/profile', {'description': 'Original biography'},
+                                   [('pattern.png', (self.fixtures / 'pattern.png').read_bytes())], file_field='avatar'))
+        endpoint = f'/api/users/{uid}/profile/moderate'
+        self.ok(self.normal.post(endpoint, {'action': 'description_delete', 'reason': 'no access'}), 403)
+        self.ok(self.mod.request('POST', endpoint, data={'action': 'description_delete', 'reason': 'csrf'}, headers={'X-CSRF-Token': 'bad'}), 403)
+        self.ok(self.mod.post(endpoint, {'action': 'description_delete'}), 422)
+        for target in [self.ids['moderator'], self.ok(self.admin.get('/api/session'))['user']['id']]:
+            self.ok(self.mod.post(f'/api/users/{target}/profile/moderate', {'action': 'description_delete', 'reason': 'protected'}), 403)
+        profile = self.ok(self.normal.get(f'/api/users/{uid}'))
+        old_avatar = profile['avatar_url']
+        self.ok(self.mod.post(endpoint, {'action': 'avatar_lock', 'reason': 'avatar abuse'}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_lock', 'reason': 'bio abuse'}))
+        self.ok(self.normal.post('/api/me/profile', {'description': 'Changed'}), 403)
+        self.ok(self.normal.post('/api/me/profile', {'remove_avatar': True}), 403)
+        self.ok(self.normal.upload('/api/me/profile', {}, [('other.png', (self.fixtures / 'other.png').read_bytes())], file_field='avatar'), 403)
+        self.ok(self.normal.post('/api/me/profile', {'flag_file': ''}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['description'], 'Original biography')
+        self.ok(self.mod.post(endpoint, {'action': 'avatar_delete', 'reason': 'remove'}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_delete', 'reason': 'remove'}))
+        self.ok(self.guest.get(old_avatar), 404)
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['description'], '')
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['avatar_url'], '/avatars/noavatar.png')
+        for field in ['avatar', 'description']:
+            self.ok(self.mod.post(endpoint, {'action': field + '_unlock', 'reason': 'appeal'}))
+        self.ok(self.normal.post('/api/me/profile', {'description': 'Allowed again'}))
+        self.ok(self.normal.upload('/api/me/profile', {}, [('other.png', (self.fixtures / 'other.png').read_bytes())], file_field='avatar'))
+        actions = [entry['action'] for entry in self.ok(self.mod.get('/api/moderation/audit'))['items']]
+        self.assertIn('profile.avatar_delete', actions)
+        self.assertIn('profile.description_unlock', actions)
+
+    def test_avatar_hashban_blocks_uploads_and_existing_copies(self):
+        uid = self.ids['normal']
+        image = (self.fixtures / 'pattern.png').read_bytes()
+        profile = self.ok(self.normal.upload('/api/me/profile', {}, [('a.png', image)], file_field='avatar'))
+        avatar_bytes = self.ok(self.guest.get(profile['avatar_url']))
+        fields = {'section_id': self.section, 'title': 'Shared image', 'body': 'Synthetic only'}
+        topic = self.ok(self.admin.upload('/api/threads', fields, [('same.jpg', avatar_bytes)]), 201)
+        attachment = self.ok(self.mod.get(f'/api/posts/{topic["post_id"]}'))['attachments'][0]
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            name = db.execute('SELECT avatar_name FROM users WHERE id=?', [uid]).fetchone()[0]
+        db.close()
+        self.ok(self.mod.post(f'/api/users/{uid}/profile/moderate', {'action': 'avatar_hashban', 'reason': 'Synthetic fixture ban'}))
+        self.assertFalse((self.storage / 'avatars' / (name + '.jpg')).exists())
+        for path in [profile['avatar_url'], attachment['view_url'], attachment['download_url'], attachment['preview_url']]:
+            self.ok(self.guest.get(path), 404)
+        self.ok(self.normal.upload('/api/me/profile', {}, [('same.png', image)], file_field='avatar'), 422)
+        self.ok(self.normal.upload('/api/me/profile', {}, [('same.jpg', avatar_bytes)], file_field='avatar'), 422)
+        self.ok(self.normal.upload('/api/threads', fields, [('same.jpg', avatar_bytes)]), 422)
+        self.assertEqual(len(self.ok(self.mod.get('/api/moderation/media-bans'))['items']), 1)
+
+    def test_description_hashban_normalization_existing_copies_and_unban(self):
+        uid = self.ids['normal']
+        text = 'Запрещённое описание'
+        self.ok(self.normal.post('/api/me/profile', {'description': text}))
+        self.ok(self.trusted.post('/api/me/profile', {'description': text.upper()}))
+        endpoint = f'/api/users/{uid}/profile/moderate'
+        self.ok(self.mod.post(endpoint, {'action': 'description_hashban', 'reason': 'Text spam'}))
+        for target in [uid, self.ids['trusted']]:
+            self.assertEqual(self.ok(self.guest.get(f'/api/users/{target}'))['description'], '')
+        self.assertEqual(self.ok(self.trusted.get('/api/session'))['user']['description'], '')
+        for variant in [text, text.upper(), '  Запрещённое\n\tописание ', 'Запрещённое\u200bописание']:
+            response = self.normal.post('/api/me/profile', {'description': variant})
+            self.ok(response, 422)
+            self.assertEqual(response[1]['error']['code'], 'description_banned')
+        self.ok(self.normal.post('/api/me/profile', {'description': 'Completely different text'}))
+        ban = self.ok(self.mod.get('/api/moderation/description-bans'))['items'][0]
+        self.assertNotIn('text_hash', ban)
+        self.ok(self.normal.post(f'/api/moderation/description-bans/{ban["id"]}/remove', {'reason': 'no'}), 403)
+        self.ok(self.mod.post(f'/api/moderation/description-bans/{ban["id"]}/remove', {'reason': 'appeal'}))
+        self.ok(self.normal.post('/api/me/profile', {'description': text}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_delete', 'reason': 'clear'}))
+        self.ok(self.mod.post(endpoint, {'action': 'description_hashban', 'reason': 'empty'}), 422)
+
+    def test_hidden_blocked_posts_revoke_all_public_surfaces(self):
+        self.trust(True)
+        fields = {'section_id': self.section, 'title': 'Restriction root', 'body': 'Root needle'}
+        topic = self.ok(self.trusted.upload('/api/threads', fields, [('a.txt', b'Safe text')]), 201)
+        reply = self.ok(self.normal.post(f'/api/threads/{topic["thread_id"]}/replies', {'body': 'uniquereplyneedle'}), 201)
+        self.moderate(reply['post_id'])
+        file = self.ok(self.guest.get(f'/api/posts/{topic["post_id"]}'))['attachments'][0]
+        root_route = f'/api/posts/{topic["post_id"]}/restrict'
+        self.ok(self.normal.post(root_route, {'action': 'hide', 'reason': 'no'}), 403)
+        self.ok(self.mod.post(root_route, {'action': 'hide'}), 422)
+        # An approved hidden reply must not affect counts, search, profile or bump.
+        self.ok(self.mod.post(f'/api/posts/{reply["post_id"]}/restrict', {'action': 'hide', 'reason': 'hide reply'}))
+        self.assertEqual(self.ok(self.guest.get('/api/threads?q=uniquereplyneedle'))['items'], [])
+        self.assertEqual(self.ok(self.guest.get('/api/threads'))['items'][0]['reply_count'], 0)
+        self.assertEqual(self.ok(self.normal.get('/api/me/posts'))['items'], [])
+        for action, reverse in [('hide', 'unhide'), ('block', 'unblock')]:
+            self.ok(self.mod.post(root_route, {'action': action, 'reason': 'Restrict root'}))
+            for client in [self.guest, self.normal, self.trusted]:
+                for path in [f'/api/threads/{topic["thread_id"]}', f'/api/posts/{topic["post_id"]}',
+                             f'/api/posts/{reply["post_id"]}', file['download_url']]:
+                    self.ok(client.get(path), 404)
+                self.assertEqual(self.ok(client.get('/api/threads'))['items'], [])
+                self.assertEqual(self.ok(client.get(f'/api/users/{self.ids["trusted"]}/posts'))['items'], [])
+                sections = self.ok(client.get('/api/sections'))
+                self.assertEqual(sections[0]['recent_posts'], [])
+            self.ok(self.mod.get(f'/api/posts/{topic["post_id"]}'))
+            self.ok(self.guest.request('HEAD', file['download_url']), 404)
+            self.ok(self.guest.request('GET', file['download_url'], headers={'Range': 'bytes=0-2'}), 404)
+            if action == 'block':
+                self.ok(self.mod.post(f'/api/posts/{topic["post_id"]}/moderate', {'action': 'approve'}), 409)
+            self.ok(self.mod.post(root_route, {'action': reverse, 'reason': 'appeal'}))
+        self.ok(self.guest.get(f'/api/threads/{topic["thread_id"]}'))
+        self.ok(self.mod.post(f'/api/posts/{reply["post_id"]}/restrict', {'action': 'unhide', 'reason': 'appeal'}))
+        self.assertEqual(self.ok(self.guest.get('/api/threads'))['items'][0]['reply_count'], 1)
+        self.assertEqual(len(self.ok(self.mod.get('/api/moderation/restricted'))['items']), 0)
+        # Block also holds a pending post against approval and author visibility.
+        pending = self.topic(self.normal)
+        self.ok(self.mod.post(f'/api/posts/{pending["post_id"]}/restrict', {'action': 'block', 'reason': 'hold'}))
+        self.ok(self.normal.get(f'/api/posts/{pending["post_id"]}'), 404)
+        self.ok(self.mod.post(f'/api/posts/{pending["post_id"]}/moderate', {'action': 'approve'}), 409)
+
+    def test_migration_006_updates_legacy_flag_references(self):
+        path = self.storage / 'legacy-flag-names.sqlite'
+        mapping = {"'apeson.png": 'apeson.png', 'Cyber Israel.png': 'Cyber-Israel.png',
+                   'Gem Pass.png': 'Gem-Pass.png', 'Great Britain.png': 'Great-Britain.png',
+                   'I was raped.png': 'I-was-raped.png'}
+        with sqlite3.connect(path) as db:
+            for migration in sorted((ROOT / 'database/migrations').glob('*.sql')):
+                if migration.name.startswith('006_'):
+                    for i, name in enumerate(mapping):
+                        db.execute('INSERT INTO users(username,password_hash,flag_file) VALUES (?,?,?)', [f'flag_{i}', 'not-used', name])
+                db.executescript(migration.read_text())
+            self.assertEqual([row[0] for row in db.execute('SELECT flag_file FROM users ORDER BY id')], list(mapping.values()))
+        db.close()
+
+    def test_renamed_flags_are_discovered_and_keep_bytes(self):
+        flags = {item['file']: item for item in self.ok(self.guest.get('/api/flags'))}
+        for name, label in [('apeson.png', "'apeson"), ('Cyber-Israel.png', 'Cyber Israel'), ('Gem-Pass.png', 'Gem Pass'),
+                            ('Great-Britain.png', 'Great Britain'), ('I-was-raped.png', 'I was raped')]:
+            self.assertIn(name, flags)
+            self.assertEqual(flags[name]['label'], label)
+            self.assertEqual(self.ok(self.guest.get(flags[name]['url'])), (ROOT / 'public' / 'flags' / name).read_bytes())
+        self.ok(self.normal.post('/api/me/profile', {'flag_file': 'Great-Britain.png'}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["normal"]}'))['flag']['file'], 'Great-Britain.png')
+
     def test_static_layouts_assets_and_private_path_allowlist(self):
-        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
+        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/moderation.js', '/fingerprint.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
             self.ok(response)
             self.assertIn("script-src 'self'", response[2]['Content-Security-Policy'])
         for path in ['/src/PostingGuard.php', '/storage/app.key', '/static/preview/spolier.png-autosave.kra', '/static/../index.php', '/public/index.html']:
             self.ok(self.guest.get(path), 404)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_moderation_tools(self):
+        a = self.ok(self.admin.upload('/api/threads', {'section_id': self.section, 'title': 'Files', 'body': 'Browser root'},
+                                     [('pattern.png', (self.fixtures / 'pattern.png').read_bytes())]), 201)
+        b = self.topic(title='Destination')
+        reply = self.ok(self.mod.post(f'/api/threads/{a["thread_id"]}/replies', {'body': 'Move this reply'}), 201)
+        deleted = self.ok(self.mod.post(f'/api/threads/{a["thread_id"]}/replies', {'body': 'Deleted reply'}), 201)
+        self.moderate(deleted['post_id'], 'delete')
+        pending = self.topic(self.normal)
+        section = self.ok(self.admin.post('/api/sections', {'slug': 'other', 'title': 'Other section'}), 201)['id']
+        file = self.ok(self.mod.get(f'/api/posts/{a["post_id"]}'))['attachments'][0]
+        self.ok(self.normal.upload('/api/me/profile', {'description': 'Browser profile spam'}, [('other.png', (self.fixtures / 'other.png').read_bytes())], file_field='avatar'))
+        result = subprocess.run(['node', 'tests/test_moderation_browser.cjs'], cwd=ROOT,
+                                env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                                     'FORBIRDS_MODERATION_FIXTURE': json.dumps({'a': a, 'b': b, 'reply': reply,
+                                          'pending': pending, 'deleted': deleted, 'file_id': file['id'], 'section_id': section, 'profile_id': self.ids['normal']})},
+                                text=True, capture_output=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
     def test_browser_forms_pow_and_moderation(self):

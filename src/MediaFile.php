@@ -5,12 +5,48 @@ namespace ForBirds;
 
 use RuntimeException;
 
-/** Streams an already-authorized attachment, including single byte ranges used by video players. */
+/** Streams an already-authorized attachment, including single byte ranges used by audio/video players. */
 final class MediaFile
 {
     public static function isVideo(string $mime): bool
     {
         return in_array($mime, ['video/mp4', 'video/webm'], true);
+    }
+
+    /** MIME/extension pairs only: never treat arbitrary octet-stream data as audio. */
+    public const AUDIO_TYPES = [
+        'audio/mpeg' => ['mp3', 'mp2'], 'audio/mp3' => ['mp3'],
+        'audio/flac' => ['flac'], 'audio/x-flac' => ['flac'],
+        'audio/wav' => ['wav'], 'audio/x-wav' => ['wav'], 'audio/vnd.wave' => ['wav'],
+        'audio/ogg' => ['ogg', 'oga', 'opus'], 'application/ogg' => ['ogg', 'oga', 'opus'],
+        'audio/opus' => ['opus'],
+        'audio/mp4' => ['m4a', 'm4b'], 'audio/x-m4a' => ['m4a', 'm4b'],
+        // fileinfo can identify the MP4 container rather than its audio track.
+        'video/mp4' => ['m4a', 'm4b'],
+        'audio/aac' => ['aac'], 'audio/x-aac' => ['aac'], 'audio/x-hx-aac-adts' => ['aac'],
+        'audio/aiff' => ['aif', 'aiff'], 'audio/x-aiff' => ['aif', 'aiff'],
+        'audio/x-ms-wma' => ['wma'], 'video/x-ms-asf' => ['wma'],
+        'audio/webm' => ['weba'], 'video/webm' => ['weba'],
+    ];
+
+    public static function isAudio(string $mime, string $name): bool
+    {
+        return in_array(strtolower(pathinfo($name, PATHINFO_EXTENSION)), self::AUDIO_TYPES[$mime] ?? [], true);
+    }
+
+    public static function playbackMime(string $mime, string $name): string
+    {
+        if (!self::isAudio($mime, $name)) return $mime;
+        return match ($mime) {
+            'video/mp4', 'audio/x-m4a' => 'audio/mp4',
+            'video/webm' => 'audio/webm',
+            'video/x-ms-asf' => 'audio/x-ms-wma',
+            'application/ogg' => 'audio/ogg',
+            'audio/x-wav', 'audio/vnd.wave' => 'audio/wav',
+            'audio/x-flac' => 'audio/flac',
+            'audio/x-hx-aac-adts', 'audio/x-aac' => 'audio/aac',
+            default => $mime,
+        };
     }
 
     public static function send(string $path, string $mime, string $disposition, string $name): never

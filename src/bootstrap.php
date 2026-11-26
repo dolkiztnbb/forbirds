@@ -2,6 +2,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/AbuseIdentity.php';
+require_once __DIR__ . '/MediaBans.php';
+require_once __DIR__ . '/TextBans.php';
+require_once __DIR__ . '/ModerationTools.php';
 require_once __DIR__ . '/Api.php';
 require_once __DIR__ . '/ImagePreview.php';
 require_once __DIR__ . '/MediaFile.php';

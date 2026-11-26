@@ -48,6 +48,7 @@ const path = require('node:path');
     await p.getByRole('button', { name: 'I speak English', exact: true }).click();
     await p.waitForFunction(() => document.querySelector('#section-select')?.options.length > 0);
     assert.equal(await p.locator('html').getAttribute('lang'), 'en');
+    await p.getByRole('button', { name: 'Compute proof', exact: true }).waitFor();
     assert.equal(await p.getByRole('button', { name: 'Compute proof', exact: true }).count(), 1);
     assert.match(await p.locator('#cooldown').textContent(), /45 seconds/);
     assert.equal(await p.locator('#section-select option').first().textContent(), 'Общий раздел');
@@ -103,6 +104,7 @@ const path = require('node:path');
     const guest = await page(guestContext), administrator = await page(adminContext), user = await page(userContext);
     await guest.goto(base + '/dashboard.html');
     await guest.waitForFunction(() => document.querySelector('#section-select')?.options.length > 0);
+    await guest.locator('#composer').waitFor();
     const originalLayout = await guest.evaluate(() => ({
       headerHeight: getComputedStyle(document.querySelector('.sub')).height,
       bannerWidth: document.querySelector('.banner-placeholder').getBoundingClientRect().width,
@@ -121,7 +123,7 @@ const path = require('node:path');
     assert.equal(originalLayout.composerIsTable, true);
     assert.equal(originalLayout.navigationInHeader, true);
     await guest.locator('#post-form [name=title]').fill('Browser guest topic');
-    await guest.locator('#post-form [name=body]').fill('Guest message through a real form');
+    await guest.locator('#post-form [name=body]').fill('Guest message through a real form\n> green quote\n< orange quote\n^ blue quote\nplain > uncolored\n\n<script>window.QUOTE_XSS=true</script>');
     const fixture = filename => fs.readFileSync(path.join(process.env.FORBIRDS_TEST_FIXTURES, filename));
     await guest.locator('#file-input').setInputFiles([
       { name: 'browser.txt', mimeType: 'text/plain', buffer: Buffer.from('Browser attachment') },
@@ -132,10 +134,13 @@ const path = require('node:path');
       { name: 'wide.webp', mimeType: 'image/webp', buffer: fixture('wide.webp') },
       { name: 'sample.webm', mimeType: 'video/webm', buffer: fixture('sample.webm') },
       { name: 'hidden.webm', mimeType: 'video/webm', buffer: fixture('sample.webm') },
+      { name: 'sample.wav', mimeType: 'audio/wav', buffer: fixture('sample.wav') },
+      { name: 'hidden.wav', mimeType: 'audio/wav', buffer: fixture('sample.wav') },
     ]);
     await guest.locator('#file-list input[type=checkbox]').nth(0).check();
     await guest.locator('#file-list input[type=checkbox]').nth(3).check();
     await guest.locator('#file-list input[type=checkbox]').nth(7).check();
+    await guest.locator('#file-list input[type=checkbox]').nth(9).check();
     assert.equal(await guest.locator('#post-submit').isDisabled(), true);
     await solve(guest);
     await guest.locator('#post-submit').click();
@@ -210,6 +215,32 @@ const path = require('node:path');
     await visibleVideo.evaluate(v => { v.pause(); });
     await guest.getByText('Видео под спойлером: hidden.webm', { exact: true }).click();
     await guest.waitForFunction(() => document.querySelectorAll('video.attachment-video').length === 2);
+    assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const hiddenAudio = attachments.find(file => file.original_name === 'hidden.wav');
+    assert.equal(mediaRequests.some(url => url.endsWith(hiddenAudio.view_url)), false);
+    const audio = guest.locator('audio.attachment-audio');
+    assert.equal(await audio.count(), 1);
+    assert.equal(await audio.getAttribute('preload'), 'none');
+    assert.equal(await audio.evaluate(a => a.controls && a.paused && !a.autoplay), true);
+    await audio.evaluate(async a => { await a.play(); });
+    await audio.evaluate(a => a.pause());
+    await guest.getByText('Аудио под спойлером: hidden.wav', { exact: true }).click();
+    await guest.waitForFunction(() => document.querySelectorAll('audio.attachment-audio').length === 2);
+    const spoilerAudio = guest.locator('.audio-box details audio');
+    await spoilerAudio.evaluate(a => a.play());
+    await guest.getByText('Аудио под спойлером: hidden.wav', { exact: true }).click();
+    await guest.waitForFunction(() => document.querySelector('.audio-box details audio').paused);
+    await audio.first().dispatchEvent('error');
+    assert.equal(await guest.getByText('Если браузер не поддерживает формат аудио, скачайте оригинал.', { exact: true }).first().isVisible(), true);
+    const body = guest.locator('#thread .post-body').first();
+    assert.equal(await body.locator('.quote-green').textContent(), '> green quote');
+    assert.equal(await body.locator('.quote-orange').first().textContent(), '< orange quote');
+    assert.equal(await body.locator('.quote-blue').textContent(), '^ blue quote');
+    assert.equal(await body.locator('script').count(), 0);
+    assert.equal(await guest.evaluate(() => window.QUOTE_XSS), undefined);
+    assert.ok((await body.textContent()).includes('plain > uncolored\n\n<script>'));
+    const colors = await body.locator('[class^="quote-"]').evaluateAll(lines => lines.map(l => getComputedStyle(l).color));
+    assert.equal(new Set(colors).size, 3);
     assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     const recent = guest.locator('#sections .section-recent li');
     assert.equal(await recent.count(), 1);

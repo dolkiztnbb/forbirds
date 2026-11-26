@@ -11,7 +11,7 @@ final class StaticFiles
             return false;
         }
         $file = $path === '/' ? '/index.html' : $path;
-        $pages = ['/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
+        $pages = ['/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/fingerprint.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
         if (!in_array($file, $pages, true)
             && !preg_match('~\A/flags/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)
             && !preg_match('~\A/(?:avatars|icons|static)/[a-zA-Z0-9/_-]+\.(?:png|jpg|jpeg|gif|webp|ico)\z~', $file)) {

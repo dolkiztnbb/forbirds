@@ -7,6 +7,22 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Некорректное действие с профилем.' => 'Invalid profile action.',
+        'Нельзя запретить пустое описание.' => 'An empty description cannot be banned.',
+        'Некорректное ограничение поста.' => 'Invalid post restriction.',
+        'Изменение этого поля профиля заблокировано модератором.' => 'A moderator has locked changes to this profile field.',
+        'Такое описание профиля запрещено.' => 'This profile description is banned.',
+        'Сначала разблокируйте сообщение.' => 'Unblock the post first.',
+        'Публикация с этого подключения или браузера ограничена.' => 'Posting from this connection or browser is restricted.',
+        'Файл заблокирован: совпадение с запрещённым материалом.' => 'File blocked: matches banned material.',
+        'Сначала включите показ IP в панели управления.' => 'Enable IP display in the dashboard first.',
+        'Некорректный тип блокировки.' => 'Invalid ban type.',
+        'Некорректная IP-сеть.' => 'Invalid IP network.',
+        'Для этого сообщения нет такого идентификатора.' => 'This post has no such identifier.',
+        'Максимальный срок блокировки — 8760 часов.' => 'The maximum ban duration is 8760 hours.',
+        'Источник и назначение совпадают.' => 'The source and destination are the same.',
+        'Некорректное действие с файлом.' => 'Invalid file action.',
+        'Файл уже удалён.' => 'This file has already been deleted.',
         'Используйте GET или POST.' => 'Use GET or POST.',
         'Получите CSRF-токен через GET /api/session.' => 'Get a CSRF token via GET /api/session.',
         'Аккаунт заблокирован.' => 'Your account is banned.',

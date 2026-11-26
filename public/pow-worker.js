@@ -3,7 +3,7 @@ importScripts('/sha256.js');
 self.onmessage = ({ data: challenge }) => {
   try {
     if (!Number.isInteger(challenge.difficulty) || challenge.difficulty < 8 || challenge.difficulty > 24) {
-      throw new Error('Неподдерживаемая сложность проверки.');
+      throw new Error('pow_difficulty');
     }
     const firstWord = ForBirdsHash.createPowHasher(challenge.prefix);
     const start = performance.now();
@@ -15,7 +15,7 @@ self.onmessage = ({ data: challenge }) => {
       }
       if (nonce % 8192 === 0) {
         if (Date.now() >= challenge.expires_at * 1000 || performance.now() - start > 120000) {
-          throw new Error('Вычисление заняло слишком много времени. Попробуйте новую проверку.');
+          throw new Error('pow_timeout');
         }
         if (performance.now() - lastProgress >= 250) {
           self.postMessage({ type: 'progress', attempts: nonce + 1 });
@@ -24,6 +24,6 @@ self.onmessage = ({ data: challenge }) => {
       }
     }
   } catch (error) {
-    self.postMessage({ type: 'error', message: error.message });
+    self.postMessage({ type: 'error', code: error.message });
   }
 };

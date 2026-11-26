@@ -20,9 +20,11 @@ final class Api
 {
     private ?array $user;
     private array $input = [];
+    private FlagCatalog $flags;
 
     public function __construct(private PDO $db, private array $config)
     {
+        $this->flags = new FlagCatalog();
         // Reload permissions on every request: bans and trust revocation apply to existing sessions.
         $this->user = isset($_SESSION['user_id'])
             ? $this->one('SELECT * FROM users WHERE id = ?', [$_SESSION['user_id']]) : null;
@@ -52,6 +54,9 @@ final class Api
             if ($path === '/api/posting-status') {
                 return (new PostingGuard($this->db, $this->config, $this->user))->status();
             }
+            if ($path === '/api/flags') {
+                return array_values($this->flags->all());
+            }
             if ($path === '/api/sections') {
                 return $this->all('SELECT * FROM sections ORDER BY id');
             }
@@ -77,6 +82,12 @@ final class Api
             }
             if (preg_match('~^/api/posts/([1-9][0-9]*)$~D', $path, $m)) {
                 return $this->postWithAttachments($this->visiblePost((int) $m[1]));
+            }
+            if (preg_match('~^/api/users/([1-9][0-9]*)/posts$~D', $path, $m)) {
+                return $this->userPosts((int) $m[1]);
+            }
+            if (preg_match('~^/api/users/([1-9][0-9]*)/avatar$~D', $path, $m)) {
+                $this->avatar((int) $m[1]);
             }
             if (preg_match('~^/api/users/([1-9][0-9]*)$~D', $path, $m)) {
                 $user = $this->one('SELECT * FROM users WHERE id = ?', [(int) $m[1]]);
@@ -104,6 +115,9 @@ final class Api
                 session_regenerate_id(true);
                 $this->user = null;
                 return ['csrf_token' => $_SESSION['csrf']];
+            }
+            if ($path === '/api/me/profile') {
+                return $this->updateProfile();
             }
             if ($path === '/api/sections') {
                 return $this->createSection();
@@ -221,6 +235,125 @@ final class Api
         return $password;
     }
 
+    private function avatarUrl(mixed $id, ?string $name): string
+    {
+        return $id && $name ? '/api/users/' . (int) $id . '/avatar?v=' . $name : '/avatars/noavatar.png';
+    }
+
+    private function avatar(int $id): never
+    {
+        $user = $this->one('SELECT avatar_name FROM users WHERE id = ?', [$id]);
+        if (!$user || !$user['avatar_name']) {
+            $this->notFound();
+        }
+        $path = (new ImagePreview($this->config['storage'], 'avatars'))->path($user['avatar_name']);
+        if (!is_file($path)) {
+            $this->notFound();
+        }
+        session_write_close();
+        header('Content-Type: image/jpeg');
+        header('Content-Length: ' . filesize($path));
+        header('Content-Disposition: inline; filename="avatar.jpg"');
+        readfile($path);
+        exit;
+    }
+
+    private function updateProfile(): array
+    {
+        $actor = $this->requireUser();
+        $description = array_key_exists('description', $this->input)
+            ? $this->text('description', 0, 4000) : $actor['description'];
+        $flag = null;
+        $changeFlag = array_key_exists('flag_file', $this->input);
+        if ($changeFlag) {
+            $flag = $this->text('flag_file', 0, 80);
+            if ($flag !== '' && !$this->flags->find($flag)) {
+                $this->invalid('Выберите существующий флаг из списка.');
+            }
+            $flag = $flag !== '' ? $flag : null;
+        }
+        $remove = $this->boolean('remove_avatar', false);
+        if (array_diff(array_keys($_FILES), ['avatar'])) {
+            $this->invalid('Используйте поле avatar для аватарки.');
+        }
+        $file = $_FILES['avatar'] ?? null;
+        $name = null;
+        $previews = new ImagePreview($this->config['storage'], 'avatars');
+        if ($file && ($file['error'] ?? null) !== UPLOAD_ERR_NO_FILE) {
+            if (!is_int($file['error'] ?? null) || $file['error'] !== UPLOAD_ERR_OK
+                || !is_string($file['tmp_name'] ?? null) || !is_uploaded_file($file['tmp_name'])) {
+                $this->invalid('Не удалось загрузить аватарку. Выберите один файл.');
+            }
+            if ($remove) {
+                $this->invalid('Нельзя одновременно загрузить и удалить аватарку.');
+            }
+            $size = filesize($file['tmp_name']);
+            if ($size < 1 || $size > 2 * 1024 * 1024) {
+                throw new ApiError(413, 'avatar_too_large', 'Аватарка должна быть не больше 2 МиБ.');
+            }
+            $mime = (new \finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
+            if (!ImagePreview::isImage($mime)) {
+                $this->invalid('Аватарка: JPEG, PNG, GIF или WebP.');
+            }
+            $name = bin2hex(random_bytes(24));
+            $previews->ensure($file['tmp_name'], $name, $mime);
+        }
+        $old = null;
+        try {
+            $result = $this->transaction(function () use ($actor, $description, $remove, $name, $flag, $changeFlag, &$old) {
+                // Read the latest avatar inside the transaction, not the potentially stale session snapshot.
+                $current = $this->one('SELECT * FROM users WHERE id = ?', [$actor['id']]);
+                $old = $current['avatar_name'];
+                $avatar = $name ?? ($remove ? null : $old);
+                $this->run('UPDATE users SET description = ?, avatar_name = ?, flag_file = ? WHERE id = ?',
+                    [$description, $avatar, $changeFlag ? $flag : $current['flag_file'], $actor['id']]);
+                return $this->one('SELECT * FROM users WHERE id = ?', [$actor['id']]);
+            });
+        } catch (Throwable $e) {
+            if ($name && is_file($previews->path($name))) {
+                unlink($previews->path($name));
+            }
+            throw $e;
+        }
+        if (($name || $remove) && $old && is_file($previews->path($old))) {
+            @unlink($previews->path($old));
+        }
+        $this->user = $result;
+        return $this->publicUser($result, true);
+    }
+
+    private function userPosts(int $id): array
+    {
+        if (!$this->one('SELECT id FROM users WHERE id = ?', [$id])) {
+            $this->notFound();
+        }
+        // Apply the same post AND parent visibility as direct post/thread access.
+        $visible = static fn (string $alias): string => "$alias.status = 'approved'";
+        $params = [$id];
+        if ($this->isStaff()) {
+            $visible = static fn (string $alias): string => '1 = 1';
+        } elseif ($this->user) {
+            $viewer = (int) $this->user['id'];
+            $visible = static fn (string $alias): string => "($alias.status = 'approved' OR ($alias.status = 'pending' AND $alias.user_id = $viewer))";
+        }
+        $postVisible = $visible('p');
+        $rootVisible = $visible('root');
+        $replyVisible = $visible('r');
+        $data = $this->page("SELECT p.id, p.thread_id, p.is_root, p.status, p.created_at,
+            substr(p.body, 1, 180) AS excerpt, t.title, t.section_id,
+            (SELECT count(*) FROM posts r WHERE r.thread_id = p.thread_id AND r.is_root = 0
+                AND r.id < p.id AND ($replyVisible)) AS preceding_replies
+            FROM posts p JOIN threads t ON t.id = p.thread_id
+            JOIN posts root ON root.thread_id = p.thread_id AND root.is_root = 1
+            WHERE p.user_id = ? AND ($postVisible) AND ($rootVisible) ORDER BY p.id DESC", $params);
+        foreach ($data['items'] as &$item) {
+            $page = $item['is_root'] ? 1 : 1 + intdiv((int) $item['preceding_replies'], 20);
+            $item['url'] = '/post.html?id=' . $item['thread_id'] . '&page=' . $page . '#post-' . $item['id'];
+            unset($item['preceding_replies']);
+        }
+        return $data;
+    }
+
     private function createSection(): array
     {
         $actor = $this->requireAdmin();
@@ -296,7 +429,7 @@ final class Api
             $condition = "(p.status = 'approved' OR (p.status = 'pending' AND p.user_id = ?))";
             $params[] = $this->user['id'];
         }
-        $replies = $this->page("SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned
+        $replies = $this->page("SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned, u.avatar_name AS author_avatar_name, u.flag_file AS author_flag_file
             FROM posts p LEFT JOIN users u ON u.id = p.user_id
             WHERE p.thread_id = ? AND p.is_root = 0 AND $condition ORDER BY p.id", $params);
         $replies['items'] = array_map(fn ($post) => $this->postWithAttachments($post), $replies['items']);
@@ -470,7 +603,7 @@ final class Api
 
     private function visiblePost(int $id): array
     {
-        $post = $this->one('SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned
+        $post = $this->one('SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned, u.avatar_name AS author_avatar_name, u.flag_file AS author_flag_file
             FROM posts p LEFT JOIN users u ON u.id = p.user_id WHERE p.id = ?', [$id]);
         if (!$post) {
             $this->notFound();
@@ -493,7 +626,9 @@ final class Api
 
     private function postWithAttachments(array $post): array
     {
-        unset($post['moderated_by']);
+        $post['avatar_url'] = $this->avatarUrl($post['user_id'] ?? null, $post['author_avatar_name'] ?? null);
+        $post['flag'] = $this->flags->find($post['author_flag_file'] ?? null);
+        unset($post['moderated_by'], $post['author_avatar_name'], $post['author_flag_file']);
         $post['attachments'] = $this->all('SELECT id, original_name, mime_type, byte_size, spoiler FROM attachments WHERE post_id = ? ORDER BY id', [$post['id']]);
         foreach ($post['attachments'] as &$file) {
             $base = '/api/attachments/' . $file['id'];
@@ -617,7 +752,9 @@ final class Api
         if (!$user) {
             return null;
         }
-        $keys = ['id', 'username', 'role', 'is_banned', 'created_at'];
+        $user['avatar_url'] = $this->avatarUrl($user['id'], $user['avatar_name'] ?? null);
+        $user['flag'] = $this->flags->find($user['flag_file'] ?? null);
+        $keys = ['id', 'username', 'role', 'is_banned', 'created_at', 'description', 'avatar_url', 'flag'];
         if ($private) {
             $keys[] = 'auto_approve';
         }

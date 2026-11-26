@@ -14,7 +14,7 @@ try {
         throw new RuntimeException("Команды: install | migrate | create-admin USERNAME (пароль через stdin)");
     }
     umask(0077);
-    foreach (['', '/sessions', '/uploads', '/previews'] as $directory) {
+    foreach (['', '/sessions', '/uploads', '/previews', '/avatars'] as $directory) {
         $path = $config['storage'] . $directory;
         if (!is_dir($path) && !mkdir($path, 0700, true)) {
             throw new RuntimeException('Не удалось создать ' . $path);

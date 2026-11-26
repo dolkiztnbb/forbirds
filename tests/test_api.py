@@ -85,7 +85,7 @@ class Client:
             data = {**data, **self.proof(advance=True)}
         return self.request('POST', path, data=data)
 
-    def upload(self, path, fields, files):
+    def upload(self, path, fields, files, file_field="files[]"):
         if self.auto_pow and self.posting(path):
             fields = {**fields, **self.proof(advance=True)}
         boundary = 'ForBirds' + uuid.uuid4().hex
@@ -93,7 +93,7 @@ class Client:
         for name, value in fields.items():
             parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
         for name, content in files:
-            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="files[]"; filename="{name}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode() + content + b'\r\n')
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{name}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode() + content + b'\r\n')
         parts.append(f'--{boundary}--\r\n'.encode())
         return self.request('POST', path, raw=b''.join(parts), headers={
             'Content-Type': 'multipart/form-data; boundary=' + boundary,
@@ -189,6 +189,7 @@ class ApiTests(unittest.TestCase):
         with sqlite3.connect(self.storage / 'forum.sqlite') as db:
             for table in ['attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
                 db.execute(f'DELETE FROM {table}')
+            db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL")
             db.execute("UPDATE users SET role = 'user', auto_approve = 0, is_banned = 0 WHERE role != 'admin'")
             db.execute("UPDATE users SET role = 'moderator' WHERE username = 'moderator'")
         db.close()
@@ -215,6 +216,233 @@ class ApiTests(unittest.TestCase):
 
     def trust(self, enabled):
         return self.ok(self.mod.post(f'/api/users/{self.ids["trusted"]}/trust', {'enabled': enabled}))
+
+    def test_profile_migration_preserves_existing_database(self):
+        legacy = self.storage / 'legacy-profile-test.sqlite'
+        with sqlite3.connect(legacy) as db:
+            db.execute('CREATE TABLE migrations(name TEXT PRIMARY KEY)')
+            for name in ['001_initial.sql', '002_posting_protection.sql']:
+                db.executescript((ROOT / 'database' / 'migrations' / name).read_text())
+                db.execute('INSERT INTO migrations(name) VALUES (?)', (name,))
+            db.execute("INSERT INTO users(username,password_hash,role,auto_approve) VALUES ('old_user','unchanged-hash','moderator',1)")
+            db.execute("INSERT INTO sections(slug,title) VALUES ('old','Old section')")
+            db.execute("INSERT INTO threads(section_id,title) VALUES (1,'Old topic')")
+            db.execute("INSERT INTO posts(thread_id,user_id,is_root,body,status) VALUES (1,1,1,'Old post','approved')")
+        db.close()
+        result = subprocess.run(self.php + ['-r',
+            "require 'src/bootstrap.php'; $db = \\ForBirds\\Database::connect(getenv('FORBIRDS_LEGACY_TEST_DB')); "
+            "\\ForBirds\\Database::migrate($db); \\ForBirds\\Database::migrate($db);"],
+            cwd=ROOT, env={**self.env, 'FORBIRDS_LEGACY_TEST_DB': str(legacy)}, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with sqlite3.connect(legacy) as db:
+            row = db.execute('SELECT username,password_hash,role,auto_approve,description,avatar_name,flag_file FROM users').fetchone()
+            self.assertEqual(row, ('old_user', 'unchanged-hash', 'moderator', 1, '', None, None))
+            self.assertEqual(db.execute('SELECT body FROM posts').fetchone()[0], 'Old post')
+            self.assertEqual(db.execute('SELECT count(*) FROM migrations').fetchone()[0], 4)
+        db.close()
+
+    def test_flag_catalog_dictionary_fallback_and_safe_autodiscovery(self):
+        directory = self.storage / 'flag-catalog-test'
+        directory.mkdir()
+        image = (self.fixtures / 'wide.png').read_bytes()
+        for name in ['RU.PNG', 'Untranslated.png', 'invalid-label.gif', 'fake.png', 'bad.svg', '.hidden.png']:
+            (directory / name).write_bytes(b'not an image' if name == 'fake.png' else image)
+        (directory / 'nested').mkdir()
+        (directory / 'nested' / 'hidden.png').write_bytes(image)
+        (directory / 'symlink.png').symlink_to(self.fixtures / 'wide.png')
+        def catalog():
+            result = subprocess.run(self.php + ['-r',
+                "require 'src/bootstrap.php'; echo json_encode(array_values((new \\ForBirds\\FlagCatalog(getenv('FORBIRDS_FLAG_TEST_DIR')))->all()));"],
+                cwd=ROOT, env={**self.env, 'FORBIRDS_FLAG_TEST_DIR': str(directory)}, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return {f['file']: f for f in json.loads(result.stdout)}
+        flags = catalog()
+        self.assertEqual(set(flags), {'RU.PNG', 'Untranslated.png', 'invalid-label.gif'})
+        self.assertEqual(flags['RU.PNG']['label'], 'RU')
+        (directory / 'flags.json').write_text(json.dumps({'RU': 'Россия', 'invalid-label': ['bad'], 'ghost': 'No file'}))
+        flags = catalog()
+        self.assertEqual(flags['RU.PNG']['label'], 'Россия')
+        self.assertEqual(flags['RU.PNG']['url'], '/flags/RU.PNG')
+        self.assertEqual(flags['Untranslated.png']['label'], 'Untranslated')
+        self.assertEqual(flags['invalid-label.gif']['label'], 'invalid-label')
+        (directory / 'flags.json').write_text('{broken json')
+        self.assertEqual(catalog()['RU.PNG']['label'], 'RU')
+        (directory / 'RU.PNG').unlink()
+        self.assertNotIn('RU.PNG', catalog())
+
+    def test_flag_selection_profile_posts_and_removal(self):
+        flags = self.ok(self.guest.get('/api/flags'))
+        ru = next(f for f in flags if f['file'] == 'ru.gif')
+        self.assertEqual(ru, {'file': 'ru.gif', 'code': 'ru', 'label': 'Россия', 'url': '/flags/ru.gif'})
+        self.ok(self.guest.get(ru['url']))
+        self.ok(self.guest.get('/flags/flags.json'), 404)
+        uid = self.ids['normal']
+        self.assertIsNone(self.ok(self.guest.get(f'/api/users/{uid}'))['flag'])
+        updated = self.ok(self.normal.post('/api/me/profile', {'flag_file': 'ru.gif'}))
+        self.assertEqual(updated['flag'], ru)
+        self.assertNotIn('flag_file', updated)
+        self.assertIsNone(self.ok(self.mod.get('/api/session'))['user']['flag'])
+        root = self.topic(self.normal)
+        self.moderate(root['post_id'])
+        reply = self.ok(self.normal.post(f'/api/threads/{root["thread_id"]}/replies', {'body': 'With flag'}), 201)
+        self.moderate(reply['post_id'])
+        thread = self.ok(self.guest.get(f'/api/threads/{root["thread_id"]}'))
+        self.assertEqual(thread['post']['flag'], ru)
+        self.assertEqual(thread['replies']['items'][0]['flag'], ru)
+        self.assertEqual(self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['flag'], ru)
+        self.assertEqual(self.ok(self.normal.post('/api/me/profile', {'description': 'Сохранить флаг'}))['flag'], ru)
+        for value in ['../ru.gif', '/flags/ru.gif', 'missing.png', [], None]:
+            self.ok(self.normal.post('/api/me/profile', {'flag_file': value, 'description': 'Не сохранять'}), 422)
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['description'], 'Сохранить флаг')
+        self.ok(self.guest.post('/api/me/profile', {'flag_file': 'ru.gif'}), 401)
+        self.ok(self.normal.request('POST', '/api/me/profile', data={'flag_file': ''}, headers={'X-CSRF-Token': 'bad'}), 403)
+        self.ok(self.normal.post('/api/me/profile', {'flag_file': ''}))
+        self.assertIsNone(self.ok(self.guest.get(f'/api/posts/{root["post_id"]}'))['flag'])
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute("UPDATE users SET flag_file = 'removed.png' WHERE id = ?", (uid,))
+        db.close()
+        self.assertIsNone(self.ok(self.guest.get(f'/api/users/{uid}'))['flag'])
+
+    def test_flag_api_discovers_new_files_without_code_changes(self):
+        code = 'TEST_' + uuid.uuid4().hex
+        filename = code + '.PNG'
+        path = ROOT / 'public' / 'flags' / filename
+        path.write_bytes((self.fixtures / 'wide.png').read_bytes())
+        self.addCleanup(lambda: path.unlink(missing_ok=True))
+        flags = self.ok(self.guest.get('/api/flags'))
+        flag = next(f for f in flags if f['file'] == filename)
+        self.assertEqual(flag['label'], code)
+        response = self.guest.get(flag['url'])
+        self.assertEqual(self.ok(response), (self.fixtures / 'wide.png').read_bytes())
+        self.assertTrue(response[2]['Content-Type'].startswith('image/png'))
+        self.assertEqual(self.ok(self.normal.post('/api/me/profile', {'flag_file': filename}))['flag'], flag)
+        path.unlink()
+        self.assertNotIn(filename, [f['file'] for f in self.ok(self.guest.get('/api/flags'))])
+        self.assertIsNone(self.ok(self.normal.get('/api/session'))['user']['flag'])
+        self.ok(self.normal.post('/api/me/profile', {'flag_file': filename}), 422)
+
+    def test_public_profiles_and_self_edit_permissions(self):
+        uid = self.ids['normal']
+        url = f'/api/users/{uid}'
+        profile = self.ok(self.guest.get(url))
+        self.assertEqual(profile['description'], '')
+        self.assertEqual(profile['avatar_url'], '/avatars/noavatar.png')
+        text = '<script>alert(1)</script> О себе\nВторая строка'
+        self.ok(self.normal.post('/api/me/profile', {'description': text, 'id': self.ids['moderator'],
+            'role': 'admin', 'auto_approve': True, 'avatar_name': '../../private'}))
+        profile = self.ok(self.guest.get(url))
+        self.assertEqual(profile['description'], text)
+        self.assertEqual(profile['role'], 'user')
+        self.assertNotIn('avatar_name', profile)
+        self.assertNotIn('password_hash', profile)
+        self.assertNotIn('auto_approve', profile)
+        self.assertEqual(self.ok(self.normal.get('/api/session'))['user']['description'], text)
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["moderator"]}'))['description'], '')
+        self.ok(self.guest.post('/api/me/profile', {'description': 'no'}), 401)
+        self.ok(self.normal.request('POST', '/api/me/profile', data={'description': 'no'}, headers={'X-CSRF-Token': 'wrong'}), 403)
+        self.ok(self.normal.post(f'/api/users/{uid}/profile', {'description': 'no'}), 404)
+        for value in ['я' * 2001, [], None]:
+            self.ok(self.normal.post('/api/me/profile', {'description': value}), 422)
+        self.assertEqual(self.ok(self.guest.get(url))['description'], text)
+        self.ok(self.admin.post(f'/api/users/{uid}/ban', {'enabled': True}))
+        self.ok(self.normal.post('/api/me/profile', {'description': 'no'}), 403)
+        self.ok(self.guest.get('/api/users/99999999'), 404)
+        self.ok(self.guest.get('/api/users/99999999/posts'), 404)
+
+    def test_profile_avatars_are_sanitized_replaced_removed_and_used_in_posts(self):
+        uid = self.ids['normal']
+        result = self.topic(self.normal)
+        old_path = None
+        for filename in ['wide.png', 'wide.jpg', 'animated.gif', 'wide.webp']:
+            updated = self.ok(self.normal.upload('/api/me/profile', {'description': 'Аватар'}, [
+                (filename, (self.fixtures / filename).read_bytes())], file_field='avatar'))
+            url = updated['avatar_url']
+            response = self.guest.get(url)
+            jpeg = self.ok(response)
+            self.assertEqual(response[2]['Content-Type'], 'image/jpeg')
+            self.assertEqual(response[2]['X-Content-Type-Options'], 'nosniff')
+            self.assertIn('no-store', response[2]['Cache-Control'])
+            self.assertEqual(self.jpeg_dimensions(jpeg), (256, 64))
+            self.assertNotEqual(jpeg, (self.fixtures / filename).read_bytes())
+            self.assertEqual(self.ok(self.normal.get(f'/api/posts/{result["post_id"]}'))['avatar_url'], url)
+            self.assertEqual(self.ok(self.normal.get(f'/api/threads/{result["thread_id"]}'))['post']['avatar_url'], url)
+            path = self.storage / 'avatars' / (urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)['v'][0] + '.jpg')
+            self.assertTrue(path.exists())
+            if old_path:
+                self.assertFalse(old_path.exists())
+            old_path = path
+        unchanged = self.ok(self.normal.post('/api/me/profile', {'description': 'Новое описание'}))
+        self.assertEqual(unchanged['avatar_url'], url)
+        removed = self.ok(self.normal.post('/api/me/profile', {'remove_avatar': True}))
+        self.assertEqual(removed['avatar_url'], '/avatars/noavatar.png')
+        self.assertFalse(old_path.exists())
+        self.ok(self.guest.get(url), 404)
+        self.ok(self.guest.get('/api/users/99999999/avatar'), 404)
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}'))['description'], 'Новое описание')
+
+    def test_bad_profile_upload_does_not_change_description_or_avatar(self):
+        updated = self.ok(self.normal.upload('/api/me/profile', {'description': 'Сохранить'}, [
+            ('image.png', (self.fixtures / 'wide.png').read_bytes())], file_field='avatar'))
+        files_before = set((self.storage / 'avatars').iterdir())
+        for filename, content, status in [('bad.svg', b'<svg xmlns="http://www.w3.org/2000/svg"/>', 422),
+                                         ('bad.png', b'Not an image', 422),
+                                         ('broken.png', self.png_header(16, 16), 422),
+                                         ('large-dimensions.png', self.png_header(12000, 3000), 413),
+                                         ('huge.png', b'x' * (2 * 1024 * 1024 + 1), 413)]:
+            self.ok(self.normal.upload('/api/me/profile', {'description': 'Не сохранять'},
+                [(filename, content)], file_field='avatar'), status)
+        self.ok(self.normal.upload('/api/me/profile', {'description': 'no', 'remove_avatar': '1'},
+            [('image.png', (self.fixtures / 'wide.png').read_bytes())], file_field='avatar'), 422)
+        self.ok(self.normal.upload('/api/me/profile', {'description': 'no'},
+            [('a.png', (self.fixtures / 'wide.png').read_bytes())], file_field='avatar[]'), 422)
+        after = self.ok(self.normal.get('/api/session'))['user']
+        self.assertEqual(after['description'], updated['description'])
+        self.assertEqual(after['avatar_url'], updated['avatar_url'])
+        self.assertEqual(set((self.storage / 'avatars').iterdir()), files_before)
+
+    def test_profile_post_visibility_and_parent_protection(self):
+        pending = self.topic(self.normal)
+        approved = self.topic(self.normal, body='Visible content')
+        self.moderate(approved['post_id'])
+        rejected = self.topic(self.normal)
+        self.moderate(rejected['post_id'], 'reject')
+        hidden_parent = self.topic(self.admin)
+        reply = self.ok(self.normal.post(f'/api/threads/{hidden_parent["thread_id"]}/replies', {'body': 'Hidden by parent'}), 201)
+        self.moderate(reply['post_id'])
+        self.moderate(hidden_parent['post_id'], 'unapprove')
+        uid = self.ids['normal']
+        for client in [self.guest, self.trusted]:
+            items = self.ok(client.get(f'/api/users/{uid}/posts'))['items']
+            self.assertEqual([p['id'] for p in items], [approved['post_id']])
+        own = self.ok(self.normal.get(f'/api/users/{uid}/posts'))['items']
+        self.assertEqual([p['id'] for p in own], [approved['post_id'], pending['post_id']])
+        for client in [self.admin, self.mod]:
+            items = self.ok(client.get(f'/api/users/{uid}/posts'))['items']
+            self.assertEqual([p['id'] for p in items], [reply['post_id'], rejected['post_id'], approved['post_id'], pending['post_id']])
+        self.ok(self.admin.post(f'/api/users/{self.ids["moderator"]}/role', {'role': 'user'}))
+        self.assertEqual(len(self.ok(self.mod.get(f'/api/users/{uid}/posts'))['items']), 1)
+        self.ok(self.admin.post(f'/api/posts/{approved["post_id"]}/moderate', {'action': 'delete'}))
+        self.assertEqual(self.ok(self.guest.get(f'/api/users/{uid}/posts'))['items'], [])
+
+    def test_profile_compact_pagination_and_reply_links(self):
+        root = self.topic(self.admin, body='root')
+        uid = self.ids['normal']
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            for i in range(21):
+                db.execute("INSERT INTO posts(thread_id,user_id,body,status) VALUES (?,?,?,'approved')",
+                           (root['thread_id'], uid, 'x' * 300))
+        db.close()
+        data = self.ok(self.guest.get(f'/api/users/{uid}/posts?limit=1'))
+        self.assertTrue(data['has_more'])
+        item = data['items'][0]
+        self.assertEqual(len(item['excerpt']), 180)
+        self.assertNotIn('body', item)
+        self.assertNotIn('attachments', item)
+        self.assertIn('&page=2#post-', item['url'])
+        thread = self.ok(self.guest.get(f'/api/threads/{root["thread_id"]}?page=2'))
+        self.assertEqual(thread['replies']['items'][0]['id'], item['id'])
+        self.assertEqual(len(self.ok(self.guest.get(f'/api/users/{uid}/posts?page=2'))['items']), 1)
+        self.ok(self.guest.get(f'/api/users/{uid}/posts?page=0'), 422)
 
     def test_premoderation_and_public_visibility(self):
         pending = self.topic(self.normal, body='hidden-unique-content')
@@ -689,7 +917,7 @@ class ApiTests(unittest.TestCase):
         self.ok(self.guest.post('/api/pow/challenge', {}), 429)
 
     def test_static_layouts_assets_and_private_path_allowlist(self):
-        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/app.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
+        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
             self.ok(response)
             self.assertIn("script-src 'self'", response[2]['Content-Security-Policy'])

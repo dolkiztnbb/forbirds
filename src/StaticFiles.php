@@ -11,9 +11,13 @@ final class StaticFiles
             return false;
         }
         $file = $path === '/' ? '/index.html' : $path;
-        $pages = ['/index.html', '/post.html', '/dashboard.html', '/general.css', '/app.css', '/app.js', '/pow-worker.js', '/sha256.js'];
+        $pages = ['/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/pow-worker.js', '/sha256.js'];
         if (!in_array($file, $pages, true)
-            && !preg_match('~\A/(?:avatars|flags|icons|static)/[a-zA-Z0-9/_-]+\.(?:png|jpg|jpeg|gif|webp|ico)\z~', $file)) {
+            && !preg_match('~\A/flags/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)
+            && !preg_match('~\A/(?:avatars|icons|static)/[a-zA-Z0-9/_-]+\.(?:png|jpg|jpeg|gif|webp|ico)\z~', $file)) {
+            return false;
+        }
+        if (str_starts_with($file, '/flags/') && !(new FlagCatalog())->find(substr($file, 7))) {
             return false;
         }
         $root = realpath(dirname(__DIR__) . '/public');
@@ -24,7 +28,7 @@ final class StaticFiles
         $types = ['html' => 'text/html', 'css' => 'text/css', 'js' => 'text/javascript',
             'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif',
             'webp' => 'image/webp', 'ico' => 'image/x-icon'];
-        header('Content-Type: ' . $types[pathinfo($resolved, PATHINFO_EXTENSION)] . '; charset=utf-8');
+        header('Content-Type: ' . $types[strtolower(pathinfo($resolved, PATHINFO_EXTENSION))] . '; charset=utf-8');
         header('X-Content-Type-Options: nosniff');
         header('Cache-Control: no-cache');
         header('Referrer-Policy: same-origin');

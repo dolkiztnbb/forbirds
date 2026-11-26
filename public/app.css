@@ -99,3 +99,29 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .footer-table hr { width: 50px; }
   .news-date { width: 110px; }
 }
+
+/* Profiles use the forum's existing post and updates styles. */
+.profile-card h1 { font-size: 18px; margin: 0 0 5px; overflow-wrap: anywhere; }
+.profile-card p { margin: 5px 0; }
+#profile-edit-title, .profile-posts-title { font-size: 16px; font-weight: normal; margin: 10px 0 5px; }
+.profile-posts-table { table-layout: fixed; }
+.profile-posts-table caption { text-align: left; font-size: 12px; padding: 0 0 5px; }
+.profile-posts-table th:first-child { width: 200px; }
+.profile-posts-table td { vertical-align: top; overflow-wrap: anywhere; padding: 5px; }
+.profile-posts-table time { font-size: 12px; font-weight: normal; }
+.profile-posts-table time span { display: block; white-space: nowrap; }
+.profile-excerpt { font-size: 12px; color: #444; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#profile-result { font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .profile-card .post-author { width: 90px; }
+  .profile-posts-table th:first-child { width: 100px; }
+}
+
+.avatar { object-fit: contain; }
+
+.user-flag { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 12px; overflow-wrap: anywhere; vertical-align: middle; }
+.user-flag img { width: 24px; height: 16px; object-fit: contain; flex-shrink: 0; }
+.post-author .user-flag { margin-top: 4px; }
+.profile-flag-picker { display: flex; flex-wrap: wrap; gap: 5px 10px; align-items: baseline; margin-bottom: 10px; }
+.section-editor .profile-flag-picker select { width: min(100%, 300px); margin-bottom: 0; }
+#profile-flag-help { margin-top: 0; }

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Профиль — ForBirds</title>
+  <link rel="stylesheet" href="/general.css">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body data-page="profile">
+  <header>
+    <div class="sub">
+      <form id="auth-form" action="/api/auth/login" method="post">
+        Вход <input aria-label="Имя пользователя" placeholder="имя пользователя" name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_]+">
+        <input aria-label="Пароль" placeholder="пароль" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="72">
+        <button name="action" value="login">Войти</button>
+        <button name="action" value="register">Регистрация</button>
+      </form>
+      <div id="account" hidden><span id="account-name"></span> <button id="logout" type="button">Выйти</button></div>
+    </div>
+    <div class="banner"><a class="banner-placeholder" href="/" aria-label="На главную">banner placeholder</a></div>
+
+    <div class="title">Поиск</div>
+    <form id="search-form" action="/index.html" method="get">
+      <input aria-label="Поиск по форуму" name="q" type="search" required minlength="2" maxlength="200">
+      <button>Искать</button>
+    </form>
+    <div class="title">Обновления</div>
+    <table class="table news-table"><tbody id="news"><tr><td>Загрузка новостей…</td></tr></tbody></table>
+  </header>
+  <p id="notice" role="status" aria-live="polite" hidden></p>
+  <noscript><p>Для форм и локальной хэш-капчи необходим JavaScript. Вычисления выполняются только после нажатия кнопки проверки.</p></noscript>
+  <div class="title" id="page-title">Профиль пользователя</div>
+  <table class="main-layout"><tbody><tr>
+    <td class="sidebar">
+    <nav class="site-nav" aria-label="Навигация">
+      <a href="/">Главная</a> · <a href="/index.html?view=all">Все темы</a> ·
+      <a href="/dashboard.html">Создать тему</a> · <a href="/profile.html" id="profile-link" hidden>Моя страница</a> · <a href="/dashboard.html?mode=mine" id="my-link" hidden>Мои сообщения</a>
+      <a href="/dashboard.html?mode=queue" id="queue-link" hidden>Модерация</a>
+    </nav>
+      <nav class="sidebar-scroll" id="sections" aria-label="Разделы">Загрузка разделов…</nav></td>
+    <td class="main-content">
+      <hr>
+      <div class="scroll">
+
+      <section id="profile" aria-label="Профиль пользователя" hidden>
+        <table class="post-table p profile-card" role="presentation"><tbody><tr>
+          <td class="post-author"><img id="profile-avatar" class="avatar" src="/avatars/noavatar.png" alt="Аватар пользователя" width="100" height="100"></td>
+          <td class="post-content">
+            <h1 id="profile-name"></h1>
+            <p id="profile-meta"></p>
+            <div id="profile-flag"></div>
+            <p id="profile-description" class="post-body"></p>
+            <div id="profile-actions"></div>
+          </td>
+        </tr></tbody></table>
+      </section>
+      <section id="profile-editor" hidden>
+        <h2 id="profile-edit-title">Редактировать свой профиль</h2>
+        <form id="profile-form" class="section-editor" action="/api/me/profile" method="post" enctype="multipart/form-data" aria-labelledby="profile-edit-title">
+          <table class="post-table p composer-table" role="presentation"><tbody><tr>
+            <td class="composer-body">
+              <label for="profile-bio">О себе</label>
+              <textarea id="profile-bio" name="description" rows="5" maxlength="4000" aria-describedby="profile-bio-help" placeholder="Расскажите немного о себе"></textarea>
+              <small id="profile-bio-help">До 4000 байт UTF-8. Описание видно всем, HTML не поддерживается.</small>
+              <label for="profile-flag-select">Флаг</label>
+              <div class="profile-flag-picker">
+                <select id="profile-flag-select" name="flag_file" aria-describedby="profile-flag-help"><option value="">Без флага</option></select>
+                <span id="profile-flag-preview" aria-live="polite"></span>
+              </div>
+              <small id="profile-flag-help">Флаг отображается в профиле и возле ваших сообщений. Выбор необязателен.</small>
+              <label for="profile-file">Новая аватарка</label>
+              <input id="profile-file" name="avatar" type="file" accept="image/jpeg,image/png,image/gif,image/webp" aria-describedby="profile-avatar-help">
+              <small id="profile-avatar-help">JPEG, PNG, GIF или WebP, до 2 МиБ. Будет сохранена статичная JPEG-картинка до 256 × 256 пикселей без метаданных.</small>
+            </td>
+            <td class="composer-options">
+              <label class="section-archive"><input name="remove_avatar" type="checkbox"> Удалить аватарку</label>
+              <button class="section-submit" type="submit">Сохранить профиль</button>
+              <p id="profile-result" role="status" aria-live="polite"></p>
+            </td>
+          </tr></tbody></table>
+        </form>
+      </section>
+      <h2 class="profile-posts-title">Сообщения пользователя</h2>
+      <p id="profile-posts-note" class="section-help"></p>
+      <div id="profile-posts" aria-live="polite">Загрузка сообщений…</div>
+      <nav id="pagination" class="pagination" aria-label="Страницы"></nav>
+
+      </div>
+    </td>
+  </tr></tbody></table>
+  <footer>
+    <div class="title">Информация</div>
+    <table class="footer-table"><tbody><tr>
+      <td><hr></td><td>ForBirds Software 1.0</td><td><hr></td>
+    </tr></tbody></table>
+  </footer>
+</body>
+</html>

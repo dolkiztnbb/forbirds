@@ -8,7 +8,12 @@ use RuntimeException;
 /** Private, metadata-free JPEG thumbnails; originals (including animated GIFs) stay untouched. */
 final class ImagePreview
 {
-    public function __construct(private string $storage) {}
+    public function __construct(private string $storage, private string $directory = 'previews')
+    {
+        if (!in_array($directory, ['previews', 'avatars'], true)) {
+            throw new RuntimeException('Invalid image directory.');
+        }
+    }
 
     public static function isImage(string $mime): bool
     {
@@ -20,7 +25,7 @@ final class ImagePreview
         if (!preg_match('/\A[a-f0-9]{48}\z/', $name)) {
             throw new RuntimeException('Invalid internal image name.');
         }
-        return $this->storage . '/previews/' . $name . '.jpg';
+        return $this->storage . '/' . $this->directory . '/' . $name . '.jpg';
     }
 
     public function ensure(string $source, string $name, string $mime): string

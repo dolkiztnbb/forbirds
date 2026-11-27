@@ -279,5 +279,15 @@ export default {
   "Закрытый журнал пуст.": "The private log is empty.",
   "Опубликовать от имени {name}? Действие попадёт в закрытый журнал.": "Post as {name}? This action will be recorded in the private log.",
   "Закрытый журнал фалзфлага": "Private falseflag log",
-  "Публикация отменена.": "Posting cancelled."
+  "Публикация отменена.": "Posting cancelled.",
+  "Режим показа": "Presentation mode",
+  "Переключить режим показа? Страницы в других вкладках тоже могут обновиться; сначала сохраните черновики.": "Switch presentation mode? Other tabs may reload too; save your drafts first.",
+  "Не удалось сохранить режим показа. Разрешите локальное хранилище браузера.": "Could not save presentation mode. Allow browser storage first.",
+  "Страница скрыта в режиме показа.": "This page is hidden in presentation mode.",
+  "Страница недоступна в режиме показа.": "This page is unavailable in presentation mode.",
+  "В режиме показа действия отключены.": "Actions are disabled in presentation mode.",
+  "Эмодзи из реакций": "Reaction emoji",
+  "Достигнут лимит длины сообщения.": "The post length limit has been reached.",
+  "Вставить {code}": "Insert {code}",
+  "В каталоге пока нет эмодзи.": "There are no emoji in the catalog yet."
 };

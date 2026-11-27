@@ -209,6 +209,11 @@ trait ModerationTools
             $this->requireStaff();
             return $this->page('SELECT id,reason,actor_id,created_at FROM media_bans ORDER BY id DESC', []);
         }
+        if (in_array($path, ['/api/moderation/network-bans', '/api/moderation/network-ban-events'], true)) {
+            $this->requireAdmin();
+            if (!$this->privacyEnabled()) throw new ApiError(403, 'privacy_disabled', 'Сначала включите показ IP в панели управления.');
+            return $this->page($path === '/api/moderation/network-bans' ? 'SELECT * FROM network_write_bans ORDER BY id DESC' : 'SELECT * FROM network_ban_events ORDER BY id DESC', []);
+        }
         if ($path === '/api/moderation/identity-bans') {
             $this->requireAdmin();
             if (!$this->privacyEnabled()) throw new ApiError(403, 'privacy_disabled', 'Сначала включите показ IP в панели управления.');
@@ -225,6 +230,13 @@ trait ModerationTools
             $_SESSION['show_identity'] = $enabled;
             $this->audit($actor['id'], 'privacy.toggle', 'user', $actor['id'], ['enabled' => $enabled]);
             return ['enabled' => $enabled];
+        }
+        if (preg_match('~^/api/moderation/network-bans/([1-9][0-9]*)/remove$~D', $path, $m)) {
+            $actor = $this->requireAdmin();
+            if (!$this->privacyEnabled()) throw new ApiError(403, 'privacy_disabled', 'Сначала включите показ IP в панели управления.');
+            $reason = $this->text('reason', 1, 1000);
+            if (!NetworkAccess::removeBan($this->db, (int) $m[1], $reason, (int) $actor['id'])) $this->notFound();
+            return ['removed' => true];
         }
         if ($path === '/api/moderation/identity-bans') return $this->identityBan();
         if (preg_match('~^/api/users/([1-9][0-9]*)/profile/moderate$~D', $path, $m)) return $this->moderateProfile((int) $m[1]);

@@ -7,6 +7,9 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Для этого подключения, браузера или аккаунта доступно только чтение.' => 'This connection, browser or account has read-only access.',
+        'Неизвестная реакция.' => 'Unknown reaction.',
+        'Реакции для этого сообщения недоступны.' => 'Reactions are unavailable for this post.',
         'Некорректное действие с профилем.' => 'Invalid profile action.',
         'Нельзя запретить пустое описание.' => 'An empty description cannot be banned.',
         'Некорректное ограничение поста.' => 'Invalid post restriction.',

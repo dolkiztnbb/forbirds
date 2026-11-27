@@ -14,10 +14,14 @@ final class StaticFiles
         $pages = ['/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/ujutnenko.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
         if (!in_array($file, $pages, true)
             && !preg_match('~\A/flags/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)
+            && !preg_match('~\A/static/reactions/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)
             && !preg_match('~\A/(?:avatars|icons|static)/[a-zA-Z0-9/_-]+\.(?:png|jpg|jpeg|gif|webp|ico)\z~', $file)) {
             return false;
         }
         if (str_starts_with($file, '/flags/') && !(new FlagCatalog())->find(substr($file, 7))) {
+            return false;
+        }
+        if (str_starts_with($file, '/static/reactions/') && !(new ReactionCatalog())->find(substr($file, strlen('/static/reactions/')))) {
             return false;
         }
         $root = realpath(dirname(__DIR__) . '/public');

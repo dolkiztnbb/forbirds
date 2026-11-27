@@ -200,3 +200,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .post-body .quote-blue { color: #1682b1; }
 
 .quote-help { display: block; overflow-wrap: anywhere; }
+
+.post-reactions { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.reaction-button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; }
+.reaction-button img { width: 24px; height: 24px; object-fit: contain; }
+.reaction-button[aria-pressed="true"] { outline: 2px solid #397bb5; background: #d5e9fa; }
+.read-only-notice { padding: 10px; border: 1px solid #a77600; background: #fff3c4; }

@@ -571,3 +571,43 @@ video/webm с расширением weba → audio/webm. Байты остаю�
 символ строки `>` задаёт зелёный цвет, `<` — оранжевый, `^` — голубой.
 Символы и переносы сохраняются; API по-прежнему принимает и возвращает простой
 текст, не HTML. К существующим постам применяется тот же рендерер без миграции.
+
+## Read-only network policy and reactions (migration 007)
+
+Tor exit addresses / known I2P gateway networks are imported by an operator;
+trusted tunnel ingress can supply a non-HTTP server marker. Setup, updates,
+limitations and recovery: [NETWORK_ACCESS.md](NETWORK_ACCESS.md).
+Every POST is denied with `403 network_read_only` for a recognized connection or
+its persisted browser/account write ban. This is checked after CSRF validation
+and before endpoint side effects; staff are not exempt. A valid write attempt
+from a recognized connection automatically records browser + current account
+restrictions. GET/HEAD remain subject to normal authorization, not write bans.
+`GET /api/session` now includes `read_only: boolean`.
+
+| Method | Route | Contract |
+|---|---|---|
+| GET | `/api/reactions` | Array of available `{file,label,url}` raster reaction images |
+| GET | `/api/posts/{id}/reactions` | Visibility-protected reaction summary, also included as `post.reactions` |
+| POST | `/api/posts/{id}/reactions` | Signed-in user + CSRF, `{reaction:"like.png"}` replaces their reaction; `{reaction:""}` removes it |
+| GET | `/api/moderation/network-bans` | Admin + enabled identity privacy checkbox; paginated current restrictions |
+| GET | `/api/moderation/network-ban-events` | Admin + privacy checkbox; paginated add/remove event history |
+| POST | `/api/moderation/network-bans/{id}/remove` | Admin + privacy checkbox + CSRF + nonempty `reason` |
+
+Summary items contain `{file,label,url,count,selected}`. Counts expose no voter
+identities; `selected` is only the current user's own state. One reaction per
+user per post, repeated assignment is idempotent; click on the selected reaction
+sends an empty string to remove it. No PoW/cooldown for reactions, but the existing
+IP write rate-limit and a dedicated 30 reaction requests/minute/IP limit apply.
+Ordinary account/identity/network bans all apply. Guests may see counts, not vote.
+Only approved posts with an approved thread root accept reactions. Locked threads
+and archived sections reject writes with `409 reactions_unavailable`; hidden/
+blocked posts or roots reject ordinary visitors with 404, including the summary
+endpoint. Staff visibility alone does not permit reacting to unpublished posts.
+Votes do not change bump order or create post revisions.
+
+Reaction images are operator assets in `public/static/reactions` (PNG/GIF/JPEG/WebP,
+2 MiB, max 512×512, up to 128; same safe filename pattern as flags). No visitor
+uploads, SVG or symlinks. Optional `reactions.json` maps filename stems to labels.
+Missing/removed images disappear from summaries without deleting votes; re-adding
+the file restores counts. README/dictionary/invalid files are not served by the
+PHP static router. Three original basic icons (like, heart, laugh) are included and may be replaced.

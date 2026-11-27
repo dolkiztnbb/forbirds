@@ -7,13 +7,14 @@ const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
 const labels = { approved: t("Опубликовано"), pending: t("Ожидает проверки"), rejected: t("Отклонено"), deleted: t("Удалено") };
 const roleLabels = { user: t("Участник"), moderator: t("Модератор"), admin: t("Администратор") };
-let me = null, csrf = '', sections = [], composer = null;
+let me = null, csrf = '', sections = [], composer = null, readOnly = false;
 const staff = () => me && !me.is_banned && ['moderator', 'admin'].includes(me.role);
 const admin = () => staff() && me.role === 'admin';
 const privacyNotice = document.createElement('details'); privacyNotice.className = 'privacy-notice';
 const privacySummary = document.createElement('summary'); privacySummary.textContent = t('Приватность и защита от спама');
 const privacyText = document.createElement('p');
 privacyText.textContent = t('Для борьбы со спамом сохраняются IP публикаций, случайный cookie ID и хэш отпечатка браузера (Canvas/WebGL). Это не аппаратный ID. IP доступны только администратору с включённым показом; доступ журналируется. Срок хранения IP — 30 дней при ежедневной очистке.');
+privacyText.textContent += ' ' + t('Распознанным подключениям Tor/I2P доступно только чтение. Попытка записи сохраняет запрет для браузера и уже вошедшего аккаунта; ограничения и история их снятия хранятся для проверки администратором.');
 privacyNotice.append(privacySummary, privacyText); document.querySelector('header').after(privacyNotice);
 const signal = browserSignal();
 const moderation = moderationUI({ node, button, link, api, post: (...args) => post(...args), notify,
@@ -53,6 +54,7 @@ async function api(path, { method = 'GET', body } = {}) {
   if (!response.ok) {
     const error = new Error(payload.error?.message || t('Ошибка {status}', { status: response.status }));
     error.code = payload.error?.code;
+    if (error.code === 'network_read_only') { readOnly = true; applyReadOnly(); }
     error.retryAfter = Number(payload.error?.retry_after || response.headers.get('Retry-After') || 0);
     throw error;
   }
@@ -60,6 +62,41 @@ async function api(path, { method = 'GET', body } = {}) {
   return payload.data;
 }
 const post = (path, body = {}) => api(path, { method: 'POST', body });
+function applyReadOnly() {
+  if (!readOnly) return;
+  if (composer) { composer.cancel(); clearInterval(composer.timer); }
+  for (const form of document.querySelectorAll('form[method="post"]')) {
+    for (const input of form.querySelectorAll('input,textarea,select,button')) input.disabled = true;
+  }
+  for (const button of document.querySelectorAll('.mod-tools button, .reaction-button, #logout, #show-identity, #thread-settings input')) button.disabled = true;
+  if ($('#composer')) $('#composer').hidden = true;
+  if (!$('#network-read-only')) {
+    const notice = node('p', t('Для этого подключения, браузера или аккаунта доступно только чтение.'), 'read-only-notice');
+    notice.id = 'network-read-only'; notice.setAttribute('role', 'status');
+    document.querySelector('header').after(notice);
+  }
+}
+function reactionBar(item) {
+  const bar = node('div', null, 'post-reactions');
+  bar.setAttribute('aria-label', t('Реакции'));
+  const fill = reactions => {
+    bar.replaceChildren();
+    for (const reaction of reactions) {
+      const control = button('', async () => {
+        const buttons = [...bar.querySelectorAll('button')]; buttons.forEach(b => { b.disabled = true; });
+        try { fill(await post(`/posts/${item.id}/reactions`, { reaction: reaction.selected ? '' : reaction.file })); }
+        finally { if (control.isConnected) buttons.forEach(b => { b.disabled = readOnly || !me || !!me.is_banned || item.status !== 'approved'; }); }
+      });
+      control.className = 'reaction-button'; control.title = reaction.label;
+      control.setAttribute('aria-label', t('Реакция: {label}', { label: reaction.label }));
+      control.setAttribute('aria-pressed', reaction.selected ? 'true' : 'false');
+      control.disabled = readOnly || !me || !!me.is_banned || item.status !== 'approved';
+      const image = node('img'); image.src = reaction.url; image.alt = ''; image.loading = 'lazy';
+      control.append(image, node('span', String(reaction.count), 'reaction-count')); bar.append(control);
+    }
+  };
+  fill(item.reactions || []); return bar;
+}
 function date(value) { return new Date(value).toLocaleString(locale()); }
 function empty(container, text) { container.replaceChildren(node('p', text, 'empty')); }
 function paginate(data) {
@@ -307,6 +344,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
     }
     content.append(files);
   }
+  if (item.reactions?.length) content.append(reactionBar(item));
   if (replyCount !== undefined) {
     const links = node('p', null, 'post-links');
     const count = t('Ответов: {count}', { count: replyCount }) + (staff() && pendingReplyCount ? t(' (на проверке: {count})', { count: pendingReplyCount }) : '');
@@ -322,7 +360,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
           await post(`/posts/${item.id}/moderate`, { action });
           notify(t('Сообщение №{id}: {status}', { id: item.id, status: labels[{ approve: 'approved', unapprove: 'pending', reject: 'rejected', delete: 'deleted' }[action]] }), false);
           await loadView(); await loadNews(); await loadSections();
-        } finally { if (b.isConnected) b.disabled = false; }
+        } finally { if (b.isConnected) b.disabled = readOnly; }
       });
       b.disabled = (action === 'approve' && (item.status === 'approved' || item.is_blocked)) || (action === 'unapprove' && item.status === 'pending');
       tools.append(b);
@@ -373,28 +411,28 @@ async function loadThread() {
       input.addEventListener('change', async () => {
         input.disabled = true;
         try { await post(`/threads/${id}/settings`, { [key]: input.checked }); await loadThread(); await loadNews(); }
-        catch (e) { input.checked = !input.checked; notify(e); } finally { input.disabled = false; }
+        catch (e) { input.checked = !input.checked; notify(e); } finally { input.disabled = readOnly; }
       }); label.prepend(input); settings.append(label);
     }
   }
   const section = sections.find(s => s.id === data.section_id);
-  const blocked = !!me?.is_banned || (!staff() && (!!data.is_locked || !!section?.is_archived));
+  const blocked = readOnly || !!me?.is_banned || (!staff() && (!!data.is_locked || !!section?.is_archived));
   $('#composer').hidden = blocked;
-  if (blocked) container.append(node('p', me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации.")));
+  if (blocked) container.append(node('p', readOnly ? t('Для этого подключения, браузера или аккаунта доступно только чтение.') : me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации.")));
   if (!blocked && !composer) composer = new Composer(id);
 }
 async function loadDashboard() {
   const mode = params.get('mode') || 'new';
   const container = $('#dashboard-content'); container.replaceChildren();
-  $('#composer').hidden = mode !== 'new' || !!me?.is_banned;
+  $('#composer').hidden = mode !== 'new' || readOnly || !!me?.is_banned;
   $('#section-admin').hidden = !admin() || mode !== 'new';
   if (mode === 'new') {
-    if (!composer && !me?.is_banned) composer = new Composer(null);
+    if (!composer && !readOnly && !me?.is_banned) composer = new Composer(null);
     if (!sections.length) container.append(node('p', t("Сначала администратор должен добавить раздел ниже.")));
     if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
   }
-  if (mode === 'media-bans' || mode === 'identity-bans' || mode === 'description-bans') {
+  if (mode === 'media-bans' || mode === 'identity-bans' || mode === 'description-bans' || mode === 'network-bans') {
     paginate(await moderation.bans(container, mode)); return;
   }
   if (mode === 'queue' || mode === 'audit' || mode === 'archive' || mode === 'restricted') {
@@ -510,7 +548,7 @@ if (profileForm) {
       profileForm.reset(); identityUI(); await loadProfile();
       result.textContent = t("Профиль сохранён.");
     } catch (error) { result.textContent = error.message; }
-    finally { submit.disabled = false; }
+    finally { submit.disabled = readOnly; }
   });
   profileForm.elements.avatar.addEventListener('change', () => {
     if (profileForm.elements.avatar.files.length) profileForm.elements.remove_avatar.checked = false;
@@ -521,6 +559,9 @@ if (profileForm) {
 }
 
 async function loadView() {
+  try { return await loadCurrentView(); } finally { applyReadOnly(); }
+}
+async function loadCurrentView() {
   if (document.body.dataset.page === 'index') return loadFeed();
   if (document.body.dataset.page === 'post') return loadThread();
   if (document.body.dataset.page === 'profile') return loadProfile();
@@ -574,10 +615,10 @@ class Composer {
     const wait = Math.max(0, Math.ceil((this.until - Date.now()) / 1000));
     if (this.proof && Date.now() >= this.proof.expires_at * 1000) this.cancel(t("Решение истекло. Вычислите новую проверку."));
     $('#cooldown').textContent = wait ? t('Следующая публикация через {seconds} сек. Затем решите проверку.', { seconds: wait }) : t('Интервал: {seconds} сек. Проверка обязательна для каждой публикации.', { seconds: this.interval });
-    $('#pow-start').disabled = !this.ready || !!wait || !!this.worker || this.busy;
+    $('#pow-start').disabled = readOnly || !this.ready || !!wait || !!this.worker || this.busy;
     $('#pow-start').textContent = this.proof ? t("Вычислить заново") : t("Вычислить проверку");
     $('#pow-cancel').hidden = !this.worker;
-    $('#post-submit').disabled = !this.ready || !!wait || !this.proof || this.busy || !!me?.is_banned || (!this.threadId && !$('#section-select').value);
+    $('#post-submit').disabled = readOnly || !this.ready || !!wait || !this.proof || this.busy || !!me?.is_banned || (!this.threadId && !$('#section-select').value);
   }
   async solve() {
     if (!this.ready || this.busy || this.worker || Date.now() < this.until) return;
@@ -668,7 +709,7 @@ function adminSections() {
     try {
       await post('/sections', Object.fromEntries(new FormData(form)));
       form.reset(); await loadSections(); options(); notify(t("Раздел создан."), false); composer?.controls();
-    } catch (e) { notify(e); } finally { submit.disabled = false; }
+    } catch (e) { notify(e); } finally { submit.disabled = readOnly; }
   });
   const formEdit = $('#section-settings-form'), select = formEdit.elements.section_id;
   const titleInput = formEdit.elements.title, description = formEdit.elements.description, archived = formEdit.elements.is_archived;
@@ -692,7 +733,7 @@ function adminSections() {
     try {
       await post(`/sections/${select.value}/settings`, { title: titleInput.value, description: description.value, is_archived: archived.checked });
       await loadSections(); options(); notify(t("Настройки раздела сохранены."), false);
-    } catch (error) { notify(error); } finally { save.disabled = false; }
+    } catch (error) { notify(error); } finally { save.disabled = readOnly; }
   });
   options();
 }
@@ -703,17 +744,17 @@ $('#auth-form').addEventListener('submit', async event => {
   try {
     await post('/auth/' + (event.submitter?.value || 'login'), Object.fromEntries(new FormData(form)));
     form.elements.password.value = ''; location.reload();
-  } catch (error) { notify(error); } finally { buttons.forEach(b => { b.disabled = false; }); }
+  } catch (error) { notify(error); } finally { buttons.forEach(b => { b.disabled = readOnly; }); }
 });
 $('#logout').addEventListener('click', async () => {
   try { await post('/auth/logout'); location.reload(); } catch (error) { notify(error); }
 });
 async function main() {
-  const session = await api('/session'); me = session.user; identityUI();
+  const session = await api('/session'); me = session.user; readOnly = !!session.read_only; identityUI();
   moderation.setIdentity(session.privacy_enabled);
   if ($('.dashboard-nav')) moderation.navigation($('.dashboard-nav'));
   await Promise.all([loadSections(), loadNews()]);
-  await loadView(); adminSections();
+  await loadView(); adminSections(); applyReadOnly();
   let message;
   try { message = sessionStorage.getItem('forbirds-notice'); } catch { /* Storage disabled. */ }
   if (message) {

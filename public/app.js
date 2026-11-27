@@ -68,7 +68,7 @@ function applyReadOnly() {
   for (const form of document.querySelectorAll('form[method="post"]')) {
     for (const input of form.querySelectorAll('input,textarea,select,button')) input.disabled = true;
   }
-  for (const button of document.querySelectorAll('.mod-tools button, .reaction-button, #logout, #show-identity, #thread-settings input')) button.disabled = true;
+  for (const button of document.querySelectorAll('.mod-tools button, .reaction-button, .reaction-add, .reaction-option, #logout, #show-identity, #thread-settings input')) button.disabled = true;
   if ($('#composer')) $('#composer').hidden = true;
   if (!$('#network-read-only')) {
     const notice = node('p', t('Для этого подключения, браузера или аккаунта доступно только чтение.'), 'read-only-notice');
@@ -79,23 +79,73 @@ function applyReadOnly() {
 function reactionBar(item) {
   const bar = node('div', null, 'post-reactions');
   bar.setAttribute('aria-label', t('Реакции'));
-  const fill = reactions => {
-    bar.replaceChildren();
+  let reactions = item.reactions || [], busy = false, picker = null;
+  const unavailable = () => busy || readOnly || !me || !!me.is_banned || item.status !== 'approved';
+  const updateControls = () => {
+    for (const control of bar.querySelectorAll('button')) control.disabled = unavailable();
+    for (const control of picker?.querySelectorAll('.reaction-option') || []) control.disabled = unavailable();
+  };
+  const image = reaction => {
+    const img = node('img'); img.src = reaction.url; img.alt = ''; img.loading = 'lazy'; return img;
+  };
+  const choose = async reaction => {
+    if (unavailable()) return;
+    busy = true; updateControls();
+    try {
+      reactions = await post(`/posts/${item.id}/reactions`, { reaction: reaction.selected ? '' : reaction.file });
+      fill();
+      if (picker?.open) picker.close();
+      else if (bar.isConnected) (bar.querySelector('.reaction-button[aria-pressed="true"]') || bar.querySelector('.reaction-add'))?.focus({ preventScroll: true });
+    } catch (error) {
+      if (picker?.open) {
+        let feedback = picker.querySelector('.reaction-picker-error');
+        if (!feedback) { feedback = node('p', null, 'reaction-picker-error'); feedback.setAttribute('role', 'alert'); picker.append(feedback); }
+        feedback.textContent = error.message;
+      }
+      throw error;
+    } finally { busy = false; updateControls(); }
+  };
+  const openPicker = async () => {
+    if (unavailable() || picker?.open) return;
+    const dialog = node('dialog', null, 'reaction-picker'); picker = dialog;
+    dialog.setAttribute('aria-label', t('Выбрать реакцию'));
+    const header = node('div', null, 'reaction-picker-header');
+    const close = button(t('Закрыть'), async () => dialog.close());
+    header.append(node('strong', t('Выбрать реакцию')), close);
+    const options = node('div', null, 'reaction-picker-options');
     for (const reaction of reactions) {
-      const control = button('', async () => {
-        const buttons = [...bar.querySelectorAll('button')]; buttons.forEach(b => { b.disabled = true; });
-        try { fill(await post(`/posts/${item.id}/reactions`, { reaction: reaction.selected ? '' : reaction.file })); }
-        finally { if (control.isConnected) buttons.forEach(b => { b.disabled = readOnly || !me || !!me.is_banned || item.status !== 'approved'; }); }
-      });
+      const control = button('', () => choose(reaction));
+      control.className = 'reaction-option';
+      control.setAttribute('aria-label', t('Реакция: {label}', { label: reaction.label }));
+      control.setAttribute('aria-pressed', reaction.selected ? 'true' : 'false');
+      control.append(image(reaction), node('span', reaction.label)); options.append(control);
+    }
+    dialog.append(header, options);
+    dialog.addEventListener('close', () => {
+      dialog.remove(); if (picker === dialog) picker = null;
+      if (bar.isConnected) bar.querySelector('.reaction-add')?.focus({ preventScroll: true });
+    }, { once: true });
+    dialog.addEventListener('click', event => {
+      const bounds = dialog.getBoundingClientRect();
+      if (event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) dialog.close();
+    });
+    document.body.append(dialog); updateControls(); dialog.showModal();
+    (options.querySelector('.reaction-option[aria-pressed="true"]') || options.querySelector('.reaction-option'))?.focus();
+  };
+  const fill = () => {
+    bar.replaceChildren();
+    for (const reaction of reactions.filter(reaction => reaction.count > 0)) {
+      const control = button('', () => choose(reaction));
       control.className = 'reaction-button'; control.title = reaction.label;
       control.setAttribute('aria-label', t('Реакция: {label}', { label: reaction.label }));
       control.setAttribute('aria-pressed', reaction.selected ? 'true' : 'false');
-      control.disabled = readOnly || !me || !!me.is_banned || item.status !== 'approved';
-      const image = node('img'); image.src = reaction.url; image.alt = ''; image.loading = 'lazy';
-      control.append(image, node('span', String(reaction.count), 'reaction-count')); bar.append(control);
+      control.append(image(reaction), node('span', String(reaction.count), 'reaction-count')); bar.append(control);
     }
+    const add = button('+', openPicker); add.className = 'reaction-add';
+    add.title = t('Добавить реакцию'); add.setAttribute('aria-label', t('Добавить реакцию'));
+    add.setAttribute('aria-haspopup', 'dialog'); bar.append(add); updateControls();
   };
-  fill(item.reactions || []); return bar;
+  fill(); return bar;
 }
 function date(value) { return new Date(value).toLocaleString(locale()); }
 function empty(container, text) { container.replaceChildren(node('p', text, 'empty')); }

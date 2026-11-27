@@ -24,5 +24,24 @@ const fs = require('node:fs');
   assert.ok(!render('https://example.org').includes('<a '));
   assert.ok(render('normal > middle').includes('normal &gt; middle'));
   assert.ok(!render('normal > middle').includes('quote-green'));
+  const emoji = [{ file: 'like.png', label: '<unsafe "label">', url: '/static/reactions/like.png' }];
+  const html = render('Hello :like: **:like:** > :missing:', emoji);
+  assert.equal((html.match(/class="post-emoji"/g) || []).length, 2);
+  assert.match(html, /alt=":like:"/);
+  assert.match(html, /title="&lt;unsafe &quot;label&quot;&gt;"/);
+  assert.ok(html.includes(':missing:'));
+  assert.ok(!render(':like:').includes('<img'));
+  for (const text of ['`:like:`', '```\n:like:\n```', '    :like:', '\\:like:', '[x](https://example.org/:like:)']) {
+    assert.ok(!render(text, emoji).includes('<img'), text);
+  }
+  assert.ok(render('> :like:', emoji).includes('class="post-emoji"'));
+  for (const fake of [
+    { file: 'like.png', url: 'https://example.org/x.png' },
+    { file: 'like.png', url: 'javascript:alert(1)' },
+    { file: '../like.png', url: '/static/reactions/../like.png' },
+    { file: 'like.svg', url: '/static/reactions/like.svg' },
+  ]) assert.ok(!render(':like:', [fake]).includes('<img'));
+  assert.ok(!render(':like:', emoji).includes('onerror='));
+  assert.ok(!render(':like:').includes('<img'), 'emoji maps do not leak between posts');
   console.log('Markdown formatting, safe links, escaped HTML, no remote images, quotes and code fences: OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -679,3 +679,31 @@ Source: `frontend/markdown.js`; shipped asset: `/markdown.js`. To rebuild:
 `npm ci && npm run build:markdown`. Licenses are in `docs/MARKDOWN_LICENSES.txt`.
 Keep the shipped asset synchronized with source/lockfile; no npm install is needed
 on a production PHP-only server when deploying the committed asset.
+
+## Presentation/public reads and reaction shortcodes
+
+`GET` and attachment `HEAD` requests may include `X-ForBirds-Public-View: 1`.
+Except for `/api/session`, the request is evaluated as an unauthenticated reader:
+no pending/hidden/rejected content, private counts or moderator-only endpoints.
+This is a request-local permission downgrade, not a session change. `/api/session`
+retains the actual account/CSRF/privacy/read-only state; `POST` permissions, CSRF,
+network restrictions and authentication are unchanged by this header. Responses
+remain `no-store`. Ordinary clients that omit the header are unaffected.
+
+The frontend presentation toggle stores `forbirds-presentation` in browser storage,
+reloads, requests public data and disables all writes through its API wrapper. It
+hides dashboards, private controls and identity/account hints before data loads.
+This is screenshot hygiene, not an authentication boundary or anonymizer: public
+content and address-bar URLs remain visible. The API remains usable by the real
+session outside this UI. Deploy `/presentation.js`, the page heads, CSS, JS and PHP
+atomically; no new migration is needed.
+
+Post bodies may contain `:like:`-style reaction shortcodes. Names are exact,
+case-sensitive reaction filenames without their raster extension from
+`GET /api/reactions`. Duplicate stems resolve to the first catalog entry. Only
+catalog-backed local `/static/reactions/…` URLs can become inline images; arbitrary
+Markdown images remain disabled. The picker beside formatting help inserts raw
+codes at the caret. JSON/storage remain raw text, including unknown codes.
+Expansion happens only in Markdown inline text, including formatted text and
+colored quotes, never escaped colons, code or link destinations. Missing/removed
+catalog files leave codes as text. Profiles, titles and excerpts stay plain text.

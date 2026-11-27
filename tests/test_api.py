@@ -519,6 +519,38 @@ class ApiTests(unittest.TestCase):
         db.close()
         self.assertEqual(self.ok(self.admin.get('/api/posting-status'))['retry_after'], 0)
 
+    def test_presentation_public_reads_hide_private_content_without_changing_session(self):
+        root = self.topic(title='Public presentation topic')
+        pending = self.ok(self.normal.upload('/api/threads', {
+            'section_id': self.section, 'title': 'presentation-private-root', 'body': 'private-body-presentation',
+        }, [('private.txt', b'private-file-presentation')]), 201)
+        reply = self.ok(self.normal.post(f'/api/threads/{root["thread_id"]}/replies', {'body': 'presentation-private-reply'}), 201)
+        file = self.ok(self.admin.get(f'/api/posts/{pending["post_id"]}'))['attachments'][0]
+        header = {'X-ForBirds-Public-View': '1'}
+        for path in ['/api/threads', '/api/sections', f'/api/threads/{root["thread_id"]}', f'/api/users/{self.ids["normal"]}/posts']:
+            ordinary = self.ok(self.guest.get(path))
+            public = self.ok(self.admin.request('GET', path, headers=header))
+            self.assertEqual(public, ordinary)
+            self.assertNotIn('presentation-private', json.dumps(public))
+        for path in [f'/api/posts/{pending["post_id"]}', f'/api/posts/{reply["post_id"]}', file['download_url']]:
+            self.ok(self.admin.request('GET', path, headers=header), 404)
+            self.ok(self.admin.get(path))
+        self.ok(self.admin.request('HEAD', file['download_url'], headers=header), 404)
+        for path in ['/api/moderation/queue', '/api/admin/falseflags', '/api/me/posts']:
+            self.ok(self.admin.request('GET', path, headers=header), 401)
+        session = self.ok(self.admin.request('GET', '/api/session', headers=header))
+        self.assertEqual(session['user']['role'], 'admin')
+        self.assertEqual(self.ok(self.admin.get('/api/session'))['user']['id'], session['user']['id'])
+
+    def test_presentation_header_does_not_grant_or_revoke_write_permissions(self):
+        header = {'X-ForBirds-Public-View': '1'}
+        fields = {'slug': 'public-view-write', 'title': 'Real permissions'}
+        self.ok(self.normal.request('POST', '/api/sections', data=fields, headers=header), 403)
+        self.ok(self.admin.request('POST', '/api/sections', data=fields, headers=header), 201)
+        root = self.topic(self.normal)
+        self.ok(self.normal.request('GET', f'/api/posts/{root["post_id"]}', headers=header), 404)
+        self.ok(self.normal.get(f'/api/posts/{root["post_id"]}'))
+
     def test_profile_migration_preserves_existing_database(self):
         legacy = self.storage / 'legacy-profile-test.sqlite'
         with sqlite3.connect(legacy) as db:
@@ -1784,12 +1816,25 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["normal"]}'))['flag']['file'], 'Great-Britain.png')
 
     def test_static_layouts_assets_and_private_path_allowlist(self):
-        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/markdown.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
+        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/presentation.js', '/markdown.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
             self.ok(response)
             self.assertIn("script-src 'self'", response[2]['Content-Security-Policy'])
         for path in ['/src/PostingGuard.php', '/storage/app.key', '/static/preview/spolier.png-autosave.kra', '/static/../index.php', '/public/index.html']:
             self.ok(self.guest.get(path), 404)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_presentation_emoji(self):
+        root = self.topic(self.normal, title='Public presentation topic', body='Public text :like:')
+        self.moderate(root['post_id'])
+        pending = self.topic(self.normal, title='PRIVATE-PRESENTATION-PENDING', body='PRIVATE-PRESENTATION-PENDING-BODY')
+        restricted = self.topic(title='PRIVATE-PRESENTATION-HIDDEN', body='PRIVATE-PRESENTATION-HIDDEN-BODY')
+        self.ok(self.mod.post(f'/api/posts/{restricted["post_id"]}/restrict', {'action': 'hide', 'reason': 'PRIVATE-PRESENTATION-REASON'}))
+        result = subprocess.run(['node', 'tests/test_presentation_emoji_browser.cjs'], cwd=ROOT,
+                                env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                                     'FORBIRDS_PRESENTATION_FIXTURE': json.dumps({'root': root, 'pending': pending, 'restricted': restricted, 'user_id': self.ids['normal']})},
+                                text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
     def test_browser_falseflag_markdown(self):

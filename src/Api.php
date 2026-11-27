@@ -38,6 +38,13 @@ final class Api
 
     public function dispatch(string $method, string $path): mixed
     {
+        // Request-local downgrade only: never changes the authenticated session or any write permission.
+        // The presentation UI requests public data to avoid leaking pending counts/snippets on screen.
+        if (in_array($method, ['GET', 'HEAD'], true) && $path !== '/api/session'
+            && ($_SERVER['HTTP_X_FORBIRDS_PUBLIC_VIEW'] ?? '') === '1') {
+            $this->user = null;
+        }
+
         if ($method === 'HEAD' && preg_match('~^/api/attachments/([1-9][0-9]*)/(download|preview|view)$~D', $path, $m)) {
             $this->attachment((int) $m[1], $m[2]);
         }

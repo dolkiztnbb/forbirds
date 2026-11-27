@@ -2,7 +2,7 @@
   "name": "forbirds-frontend-tests",
   "private": true,
   "scripts": {
-    "test": "node tests/test_hash.cjs && node tests/test_i18n.cjs && node tests/test_markdown.cjs",
+    "test": "node tests/test_hash.cjs && node tests/test_i18n.cjs && node tests/test_markdown.cjs && node tests/test_presentation.cjs",
     "test:browser": "FORBIRDS_BROWSER=1 python3 -m unittest discover -s tests -k test_browser -v",
     "build:markdown": "esbuild frontend/markdown.js --bundle --format=esm --platform=browser --minify --legal-comments=inline --outfile=public/markdown.js"
   },

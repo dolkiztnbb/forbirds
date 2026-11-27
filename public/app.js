@@ -1,6 +1,7 @@
 import { t, locale, initLanguage } from '/i18n.js';
 import { browserSignal } from '/ujutnenko.js';
 import { moderationUI } from '/moderation.js';
+import { renderMarkdown } from '/markdown.js';
 await initLanguage();
 
 const $ = selector => document.querySelector(selector);
@@ -293,14 +294,9 @@ function audioPlayer(file) {
   const player = node('div'); player.append(audio, fallback); return player;
 }
 function postBody(text) {
-  const body = node('div', null, 'post-body');
-  // textContent, not HTML: quote prefixes never enable markup or scripts.
-  const lines = text.split(/\r\n|\r|\n/);
-  lines.forEach((line, index) => {
-    if (index) body.append(document.createTextNode('\n'));
-    const color = { '>': 'green', '<': 'orange', '^': 'blue' }[line[0]];
-    body.append(color ? node('span', line, 'quote-' + color) : document.createTextNode(line));
-  });
+  const body = node('div', null, 'post-body markdown-body');
+  // Only fixed, locally bundled markdown-it output. Raw HTML and image rendering are disabled.
+  body.innerHTML = renderMarkdown(text);
   return body;
 }
 function flagBadge(flag) {
@@ -482,6 +478,18 @@ async function loadDashboard() {
     if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
   }
+  if (mode === 'falseflags') {
+    if (!admin()) { empty(container, t('Для этого действия нужны права администратора.')); return; }
+    const data = await api('/admin/falseflags?' + pageQuery());
+    if (!data.items.length) empty(container, t('Закрытый журнал пуст.'));
+    for (const entry of data.items) {
+      const row = node('p');
+      row.append(link('№' + entry.post_id, '/post.html?id=' + entry.thread_id + '#post-' + entry.post_id),
+        node('span', ` · ${date(entry.created_at)} · ${entry.actor_name} → ${entry.target_name} · ${entry.reason}`));
+      container.append(row);
+    }
+    paginate(data); return;
+  }
   if (mode === 'media-bans' || mode === 'identity-bans' || mode === 'description-bans' || mode === 'network-bans') {
     paginate(await moderation.bans(container, mode)); return;
   }
@@ -628,6 +636,17 @@ class Composer {
     $('#publish-flags').hidden = !!threadId || !staff();
     $('#section-select').required = !threadId;
     this.form.elements.title.required = !threadId;
+    $('#falseflag-controls').hidden = !admin();
+    const attributionControls = () => {
+      const enabled = admin() && $('#falseflag-enabled').checked;
+      for (const input of [$('#falseflag-user'), $('#falseflag-reason')]) { input.disabled = !enabled || readOnly; input.required = enabled; }
+    };
+    $('#falseflag-enabled').checked = false;
+    $('#falseflag-enabled').addEventListener('change', attributionControls);
+    this.resetAttribution = () => {
+      $('#falseflag-enabled').checked = false; $('#falseflag-user').value = ''; $('#falseflag-reason').value = ''; attributionControls();
+    };
+    this.resetAttribution();
     $('#pow-start').addEventListener('click', () => this.solve().catch(notify));
     $('#pow-cancel').addEventListener('click', () => this.cancel(t("Проверка отменена.")));
     this.form.addEventListener('submit', event => { event.preventDefault(); this.submit().catch(notify); });
@@ -728,8 +747,16 @@ class Composer {
     this.files.forEach((entry, i) => { data.append('files[]', entry.file); if (entry.spoiler) data.append('spoilers[]', String(i)); });
     $('#post-result').textContent = t("Отправка…");
     try {
+      if (admin() && $('#falseflag-enabled').checked) {
+        const target = await api('/users/' + $('#falseflag-user').value);
+        if (!confirm(t('Опубликовать от имени {name}? Действие попадёт в закрытый журнал.', { name: target.username }))) {
+          $('#post-result').textContent = t('Публикация отменена.'); return;
+        }
+        data.set('post_as_user_id', String(target.id)); data.set('falseflag_reason', $('#falseflag-reason').value);
+      }
       const result = await post(this.threadId ? `/threads/${this.threadId}/replies` : '/threads', data);
       const message = t('Сообщение №{id}: {status}.', { id: result.post_id, status: labels[result.status] });
+      this.resetAttribution();
       this.form.elements.body.value = ''; this.files = []; this.renderFiles();
       this.cancel(t("Для следующей публикации нужна новая проверка."));
       // Never let a failed status refresh turn a successful POST into an apparent failure.

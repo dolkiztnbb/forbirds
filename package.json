@@ -2,10 +2,15 @@
   "name": "forbirds-frontend-tests",
   "private": true,
   "scripts": {
-    "test": "node tests/test_hash.cjs && node tests/test_i18n.cjs",
-    "test:browser": "FORBIRDS_BROWSER=1 python3 -m unittest discover -s tests -k test_browser -v"
+    "test": "node tests/test_hash.cjs && node tests/test_i18n.cjs && node tests/test_markdown.cjs",
+    "test:browser": "FORBIRDS_BROWSER=1 python3 -m unittest discover -s tests -k test_browser -v",
+    "build:markdown": "esbuild frontend/markdown.js --bundle --format=esm --platform=browser --minify --legal-comments=inline --outfile=public/markdown.js"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "playwright-core": "1.65.1"
+  },
+  "dependencies": {
+    "markdown-it": "^15.0.3"
   }
 }

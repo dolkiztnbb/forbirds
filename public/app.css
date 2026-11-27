@@ -215,3 +215,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .reaction-option { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; min-width: 0; overflow-wrap: anywhere; }
 .reaction-option img { width: 32px; height: 32px; object-fit: contain; }
 .reaction-option[aria-pressed="true"] { outline: 2px solid #397bb5; background: #d5e9fa; }
+
+.markdown-help { display: block; overflow-wrap: anywhere; }
+.post-body.markdown-body { white-space: normal; }
+.markdown-body p { white-space: pre-wrap; margin: .5em 0; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body .quote-green, .markdown-body .quote-orange, .markdown-body .quote-blue { white-space: pre-wrap; }
+.markdown-body pre { white-space: pre; overflow-x: auto; max-width: 100%; padding: 8px; background: #e4e7e7; }
+.markdown-body code { font-family: monospace; background: #e4e7e7; }
+.markdown-body li { margin: .2em 0; }
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.markdown-body th, .markdown-body td { border: 1px solid #999; padding: 4px; }
+#falseflag-controls label { display: block; margin: 4px 0; }
+#falseflag-controls input:not([type="checkbox"]) { display: block; box-sizing: border-box; width: 100%; min-width: 0; }

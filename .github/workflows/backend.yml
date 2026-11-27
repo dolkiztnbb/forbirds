@@ -18,12 +18,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: SHA-256, worker and translation tests
+      - name: SHA-256, worker, translation and Markdown tests
         run: npm test
       - name: Install browser tests
         if: matrix.php == '8.5'
         run: |
           npm ci
+          npm run build:markdown
+          git diff --exit-code -- public/markdown.js
           npx playwright-core install --with-deps chromium
       - name: Syntax check
         run: find src public bin -name '*.php' -print0 | xargs -0 -n1 php -l

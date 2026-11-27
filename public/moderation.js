@@ -104,6 +104,7 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
       container.append(link(text, '/dashboard.html?mode=' + mode), ' · ');
     }
     if (admin()) {
+      container.append(link(t('Автоблокировки Tor/I2P'), '/dashboard.html?mode=network-bans'), ' · ');
       container.append(link(t('Блокировки подключений'), '/dashboard.html?mode=identity-bans'), ' · ');
       const label = node('label', t('Показывать IP и идентификаторы (только администратор)'));
       const input = node('input'); input.type = 'checkbox'; input.id = 'show-identity'; input.checked = showIdentity;
@@ -123,7 +124,7 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     const data = await api('/moderation/' + mode + '?' + new URLSearchParams({ page: new URLSearchParams(location.search).get('page') || '1', limit: '20' }));
     if (!data.items.length) container.append(node('p', t('Список блокировок пуст.')));
     for (const ban of data.items) {
-      const row = node('p', `#${ban.id} · ${ban.kind || ''} ${ban.value || ''} · ${ban.reason} · ${ban.expires_at ? new Date(ban.expires_at * 1000).toLocaleString(locale()) : ban.created_at}`);
+      const row = node('p', `#${ban.id} · ${ban.kind || ''} ${ban.value || ''} · ${ban.reason} · ${ban.expires_at ? new Date(ban.expires_at * 1000).toLocaleString(locale()) : typeof ban.created_at === 'number' ? new Date(ban.created_at * 1000).toLocaleString(locale()) : ban.created_at}`);
       row.append(button(t('Снять блокировку'), async () => {
         const why = reason(); if (!why) return;
         await post(`/moderation/${mode}/${ban.id}/remove`, { reason: why });

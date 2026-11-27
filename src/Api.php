@@ -19,6 +19,8 @@ final class ApiError extends RuntimeException
 final class Api
 {
     use ModerationTools;
+    use Reactions;
+    private NetworkAccess $network;
     private AbuseIdentity $identity;
     private ?array $user;
     private array $input = [];
@@ -31,6 +33,7 @@ final class Api
         // Reload permissions on every request: bans and trust revocation apply to existing sessions.
         $this->user = isset($_SESSION['user_id'])
             ? $this->one('SELECT * FROM users WHERE id = ?', [$_SESSION['user_id']]) : null;
+        $this->network = new NetworkAccess($db, $this->identity, $this->user);
     }
 
     public function dispatch(string $method, string $path): mixed
@@ -46,6 +49,7 @@ final class Api
             if (!is_string($token) || !hash_equals($_SESSION['csrf'], $token)) {
                 throw new ApiError(403, 'csrf_failed', 'Получите CSRF-токен через GET /api/session.');
             }
+            $this->network->assertWritable();
             $this->input = $this->readInput();
             $this->rateLimit('write', 120, 60);
             if (!$this->isStaff() && !in_array($path, ['/api/auth/login', '/api/auth/logout'], true)) $this->identity->assertAllowed();
@@ -58,10 +62,15 @@ final class Api
             $extra = $this->moderationGet($path);
             if ($extra !== null) return $extra;
             if ($path === '/api/session') {
-                return ['csrf_token' => $_SESSION['csrf'], 'user' => $this->publicUser($this->user, true), 'privacy_enabled' => $this->privacyEnabled()];
+                return ['csrf_token' => $_SESSION['csrf'], 'user' => $this->publicUser($this->user, true), 'privacy_enabled' => $this->privacyEnabled(), 'read_only' => $this->network->readOnly()];
             }
             if ($path === '/api/posting-status') {
                 return (new PostingGuard($this->db, $this->config, $this->user))->status();
+            }
+            if ($path === '/api/reactions') return array_values((new ReactionCatalog())->all());
+            if (preg_match('~^/api/posts/([1-9][0-9]*)/reactions$~D', $path, $m)) {
+                $this->visiblePost((int) $m[1]);
+                return $this->reactionSummary((int) $m[1]);
             }
             if ($path === '/api/flags') {
                 return array_values($this->flags->all());
@@ -111,6 +120,7 @@ final class Api
         } else {
             $extra = $this->moderationPost($path);
             if ($extra !== null) return $extra;
+            if (preg_match('~^/api/posts/([1-9][0-9]*)/reactions$~D', $path, $m)) return $this->react((int) $m[1]);
             if ($path === '/api/pow/challenge') {
                 $this->rateLimit('pow', 20, 60);
                 return (new PostingGuard($this->db, $this->config, $this->user))->issue();
@@ -223,6 +233,7 @@ final class Api
         if ($user['is_banned']) {
             throw new ApiError(403, 'banned', 'Аккаунт заблокирован.');
         }
+        $this->network->assertAccountWritable((int) $user['id']);
         if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
             $this->run('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash($password, PASSWORD_DEFAULT), $user['id']]);
         }
@@ -715,6 +726,7 @@ final class Api
         $post['avatar_url'] = $this->avatarUrl($post['user_id'] ?? null, $post['author_avatar_name'] ?? null);
         $post['flag'] = $this->flags->find($post['author_flag_file'] ?? null);
         unset($post['moderated_by'], $post['author_avatar_name'], $post['author_flag_file']);
+        $post['reactions'] = $this->reactionSummary((int) $post['id']);
         $post['attachments'] = [];
         foreach ($this->all('SELECT * FROM attachments WHERE post_id = ? ORDER BY id', [$post['id']]) as $stored) {
             $stored = $this->indexedAttachment($stored);

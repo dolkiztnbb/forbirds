@@ -202,7 +202,7 @@ class ApiTests(unittest.TestCase):
 
     def setUp(self):
         with sqlite3.connect(self.storage / 'forum.sqlite') as db:
-            for table in ['description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
+            for table in ['post_reactions', 'network_ranges', 'network_write_bans', 'network_ban_events', 'description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
                 db.execute(f'DELETE FROM {table}')
             db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL, avatar_locked = 0, description_locked = 0")
             db.execute("UPDATE users SET role = 'user', auto_approve = 0, is_banned = 0 WHERE role != 'admin'")
@@ -231,6 +231,216 @@ class ApiTests(unittest.TestCase):
 
     def trust(self, enabled):
         return self.ok(self.mod.post(f'/api/users/{self.ids["trusted"]}/trust', {'enabled': enabled}))
+
+    def reaction_images(self):
+        directory = ROOT / 'public/static/reactions'
+        names = ['testreaction-' + uuid.uuid4().hex + '.png' for _ in range(2)]
+        for name in names:
+            path = directory / name
+            path.write_bytes((self.fixtures / 'small.png').read_bytes())
+            self.addCleanup(lambda p=path: p.unlink(missing_ok=True))
+        return names
+
+    def network_range(self, enabled=True, source='tor'):
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute('DELETE FROM network_ranges')
+            if enabled:
+                db.execute('INSERT INTO network_ranges VALUES (?,?,?)', [source, '127.0.0.1/32', int(time.time())])
+        db.close()
+
+    def test_network_read_only_covers_all_posts_and_preserves_reads(self):
+        root = self.topic()
+        self.network_range()
+        self.assertTrue(self.ok(self.guest.get('/api/session'))['read_only'])
+        self.ok(self.guest.get('/api/threads'))
+        self.ok(self.guest.get(f'/api/posts/{root["post_id"]}'))
+        self.ok(self.guest.get('/app.js'))
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM network_write_bans').fetchone()[0], 0)
+        db.close()
+        self.ok(self.guest.request('POST', '/api/pow/challenge', data={}, headers={'X-CSRF-Token': 'wrong'}), 403)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM network_write_bans').fetchone()[0], 0)
+        db.close()
+        self.normal.auto_pow = False
+        for path, data in [('/api/auth/register', {'username': 'toruser', 'password': PASSWORD}),
+                           ('/api/auth/login', {'username': 'normal', 'password': PASSWORD}),
+                           ('/api/auth/logout', {}), ('/api/pow/challenge', {}),
+                           ('/api/threads', {}), (f'/api/threads/{root["thread_id"]}/replies', {'body': 'denied'}),
+                           ('/api/me/profile', {'description': 'denied'}),
+                           (f'/api/posts/{root["post_id"]}/reactions', {'reaction': ''}),
+                           ('/api/sections', {}), (f'/api/posts/{root["post_id"]}/moderate', {'action': 'delete'})]:
+            response = self.normal.post(path, data)
+            self.ok(response, 403)
+            self.assertEqual(response[1]['error']['code'], 'network_read_only')
+        # No role bypass: a staff member can read, but cannot write via Tor either.
+        self.ok(self.mod.post('/api/pow/challenge', {}), 403)
+        self.ok(self.admin.post('/api/pow/challenge', {}), 403)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM network_write_bans').fetchone()[0], 6)
+            self.assertEqual(db.execute('SELECT count(*) FROM network_ban_events').fetchone()[0], 6)
+            self.assertEqual(db.execute('SELECT count(*) FROM posts').fetchone()[0], 1)
+        db.close()
+
+    def test_network_bans_persist_unban_privacy_and_no_spoofing(self):
+        fake = {'X-Forwarded-For': '198.51.100.8', 'X-ForBirds-Access-Network': 'i2p',
+                'ForBirds-Access-Network': 'tor', 'X-Tor': 'true', 'X-I2P-DestHash': 'fake', 'User-Agent': 'Tor Browser'}
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute('INSERT INTO network_ranges VALUES (?,?,?)', ['tor', '198.51.100.8/32', int(time.time())])
+        db.close()
+        self.ok(self.guest.request('POST', '/api/pow/challenge', data={}, headers=fake))
+        self.network_range(source='i2p')
+        self.ok(self.normal.post('/api/pow/challenge', {}), 403)
+        self.network_range(False)
+        self.ok(self.normal.post('/api/pow/challenge', {}), 403)  # cookie AND account survive exit change
+        fresh = Client(self.base)
+        self.ok(fresh.post('/api/pow/challenge', {}))
+        self.ok(fresh.post('/api/auth/login', {'username': 'normal', 'password': 'Incorrect-password-123'}), 401)
+        self.ok(fresh.post('/api/auth/login', {'username': 'normal', 'password': PASSWORD}), 403)
+        for client in [self.normal, self.mod, self.admin]:
+            self.ok(client.get('/api/moderation/network-bans'), 403)
+        self.ok(self.admin.post('/api/moderation/privacy', {'enabled': True}))
+        bans = self.ok(self.admin.get('/api/moderation/network-bans'))['items']
+        self.assertEqual({b['kind'] for b in bans}, {'user', 'browser'})
+        self.assertTrue(all(b['source'] == 'i2p' for b in bans))
+        for ban in bans:
+            self.ok(self.admin.post(f'/api/moderation/network-bans/{ban["id"]}/remove', {'reason': ''}), 422)
+            self.ok(self.mod.post(f'/api/moderation/network-bans/{ban["id"]}/remove', {'reason': 'no access'}), 403)
+            self.ok(self.admin.post(f'/api/moderation/network-bans/{ban["id"]}/remove', {'reason': 'Appeal accepted'}))
+        events = self.ok(self.admin.get('/api/moderation/network-ban-events'))['items']
+        self.assertEqual([e['action'] for e in events], ['remove', 'remove', 'add', 'add'])
+        self.ok(self.normal.post('/api/pow/challenge', {}))
+        self.ok(fresh.post('/api/auth/login', {'username': 'normal', 'password': PASSWORD}))
+        self.assertFalse(self.ok(self.normal.get('/api/session'))['read_only'])
+
+    def test_network_cli_import_status_and_recovery(self):
+        path = self.storage / 'cli-tor.txt'
+        path.write_text('198.51.100.5\n2001:db8::5\n')
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            ban_id = db.execute("INSERT INTO network_write_bans(kind,value,source,reason,created_at) VALUES ('browser',?,'tor','test',?)", ['b' * 64, int(time.time())]).lastrowid
+        db.close()
+        target = self.offline_cli('import-network-list', 'tor', str(path))
+        env = {**self.env, 'FORBIRDS_STORAGE': str(target)}
+        for command in [['network-status'], ['remove-network-ban', str(ban_id), 'CLI recovery']]:
+            result = subprocess.run(self.php + ['bin/console.php', *command], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            if command[0] == 'network-status': self.assertIn('tor: 2 entries', result.stdout)
+        with sqlite3.connect(target / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM network_write_bans').fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT count(*) FROM network_ban_events WHERE action='remove' AND actor_id IS NULL").fetchone()[0], 1)
+        db.close()
+
+    def test_network_import_validation_and_trusted_server_marker(self):
+        good = self.storage / 'tor-list.txt'
+        good.write_text('# Test list\n198.51.100.8\n2001:db8::1\n198.51.100.8\n')
+        invalid = self.storage / 'bad-list.txt'
+        invalid.write_text('198.51.100.9\n<html>bad upstream</html>\n')
+        empty = self.storage / 'empty-list.txt'
+        empty.write_text('# empty\n')
+        code = r'''
+            $config = require 'src/bootstrap.php';
+            $db = ForBirds\Database::connect(':memory:'); ForBirds\Database::migrate($db);
+            $root = $config['storage'];
+            assert(ForBirds\NetworkAccess::import($db,'tor',$root.'/tor-list.txt') === 2);
+            foreach (['bad-list.txt','empty-list.txt'] as $file) {
+                try { ForBirds\NetworkAccess::import($db,'tor',$root.'/'.$file); throw new Exception('Unexpected success'); }
+                catch (RuntimeException $e) {}
+                assert($db->query('SELECT count(*) FROM network_ranges')->fetchColumn() == 2);
+            }
+            $_SERVER['REMOTE_ADDR'] = '2001:db8::1';
+            $identity = new ForBirds\AbuseIdentity($db,$config);
+            assert((new ForBirds\NetworkAccess($db,$identity,null))->readOnly());
+            $_SERVER['REMOTE_ADDR'] = '192.0.2.50';
+            $_SERVER['HTTP_FORBIRDS_ACCESS_NETWORK'] = 'i2p';
+            $identity = new ForBirds\AbuseIdentity($db,$config);
+            assert(!(new ForBirds\NetworkAccess($db,$identity,null))->readOnly());
+            $_SERVER['FORBIRDS_ACCESS_NETWORK'] = 'i2p';
+            $access = new ForBirds\NetworkAccess($db,$identity,null);
+            assert($access->readOnly());
+            try { $access->assertWritable(); throw new Exception('Unexpected success'); }
+            catch (ForBirds\ApiError $e) { assert($e->errorCode === 'network_read_only'); }
+            $id = $db->query('SELECT id FROM network_write_bans')->fetchColumn();
+            assert(ForBirds\NetworkAccess::removeBan($db,(int)$id,'CLI recovery',null));
+            assert($db->query("SELECT count(*) FROM network_ban_events WHERE action='remove'")->fetchColumn() == 1);
+            file_put_contents($root.'/cidrs.txt',"192.0.2.0/24\n2001:db8::/32\n");
+            assert(ForBirds\NetworkAccess::import($db,'i2p',$root.'/cidrs.txt') === 2);
+            unset($_SERVER['FORBIRDS_ACCESS_NETWORK']);
+            assert((new ForBirds\NetworkAccess($db,$identity,null))->readOnly());
+            echo 'network unit OK';
+        '''
+        result = subprocess.run(self.php + ['-d', 'zend.assertions=1', '-d', 'assert.exception=1', '-r', code],
+                                cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('network unit OK', result.stdout)
+
+    def test_reactions_catalog_rejects_unsafe_files(self):
+        directory = self.storage / 'reactions-catalog'
+        directory.mkdir()
+        for name in ['good.png', 'UPPER.PNG', 'fake.png', 'bad.svg', 'space name.png']:
+            (directory / name).write_bytes(b'<svg>not an image</svg>' if name in ['bad.svg', 'fake.png'] else (self.fixtures / 'small.png').read_bytes())
+        (directory / 'linked.png').symlink_to(self.fixtures / 'small.png')
+        (directory / 'huge.png').write_bytes((self.fixtures / 'portrait.png').read_bytes())
+        (directory / 'reactions.json').write_text('{"good":"<script>label</script>"}')
+        code = "require 'src/bootstrap.php'; echo json_encode(array_values((new ForBirds\\ReactionCatalog(getenv('REACTION_TEST_DIR')))->all()));"
+        result = subprocess.run(self.php + ['-r', code], cwd=ROOT, env={**self.env, 'REACTION_TEST_DIR': str(directory)}, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        catalog = {r['file']: r for r in json.loads(result.stdout)}
+        self.assertEqual(set(catalog), {'good.png', 'UPPER.PNG'})
+        self.assertEqual(catalog['good.png']['label'], '<script>label</script>')
+        self.ok(self.guest.get('/static/reactions/README.md'), 404)
+        self.ok(self.guest.get('/static/reactions/reactions.json'), 404)
+
+    def test_reactions_catalog_voting_counts_and_permissions(self):
+        first, second = self.reaction_images()
+        root = self.topic()
+        pid = root['post_id']
+        path = f'/api/posts/{pid}/reactions'
+        items = {r['file']: r for r in self.ok(self.guest.get('/api/reactions'))}
+        self.ok(self.guest.get(items[first]['url']))
+        self.ok(self.guest.post(path, {'reaction': first}), 401)
+        self.ok(self.normal.request('POST', path, data={'reaction': first}, headers={'X-CSRF-Token': 'bad'}), 403)
+        self.ok(self.normal.post(path, {'reaction': '../bad.png'}), 422)
+        for _ in range(2):
+            summary = self.ok(self.normal.post(path, {'reaction': first}))
+            self.assertEqual(next(r for r in summary if r['file'] == first)['count'], 1)
+        self.ok(self.trusted.post(path, {'reaction': first}))
+        self.assertEqual(next(r for r in self.ok(self.guest.get(path)) if r['file'] == first)['count'], 2)
+        self.ok(self.normal.post(path, {'reaction': second}))
+        summary = {r['file']: r for r in self.ok(self.normal.get(path))}
+        self.assertEqual(summary[first]['count'], 1)
+        self.assertTrue(summary[second]['selected'])
+        self.assertTrue(all(not r['selected'] for r in self.ok(self.guest.get(path))))
+        self.ok(self.normal.post(path, {'reaction': ''}))
+        (ROOT / 'public/static/reactions' / first).unlink()
+        self.assertNotIn(first, [r['file'] for r in self.ok(self.guest.get(path))])
+        self.ok(self.trusted.post(path, {'reaction': ''}))
+        self.ok(self.admin.post(f'/api/users/{self.ids["normal"]}/ban', {'enabled': True}))
+        self.ok(self.normal.post(path, {'reaction': second}), 403)
+
+    def test_reactions_visibility_locked_network_and_rate_limit(self):
+        first, _ = self.reaction_images()
+        root = self.topic(self.normal)
+        pid = root['post_id']; path = f'/api/posts/{pid}/reactions'
+        self.ok(self.guest.get(path), 404)
+        self.ok(self.normal.post(path, {'reaction': first}), 409)
+        self.moderate(pid)
+        self.network_range()
+        self.ok(self.normal.post(path, {'reaction': first}), 403)
+        self.network_range(False)
+        # Other browsers/accounts still work after leaving the exit network.
+        self.ok(self.trusted.post(path, {'reaction': first}))
+        self.ok(self.mod.post(f'/api/posts/{pid}/restrict', {'action': 'hide', 'reason': 'test'}))
+        self.ok(self.guest.get(path), 404)
+        self.ok(self.trusted.post(path, {'reaction': first}), 404)
+        self.ok(self.mod.post(f'/api/posts/{pid}/restrict', {'action': 'unhide', 'reason': 'test'}))
+        self.ok(self.mod.post(f'/api/threads/{root["thread_id"]}/settings', {'is_locked': True}))
+        self.ok(self.trusted.post(path, {'reaction': first}), 409)
+        self.ok(self.mod.post(f'/api/threads/{root["thread_id"]}/settings', {'is_locked': False}))
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute('DELETE FROM rate_limits')
+        db.close()
+        for _ in range(30): self.ok(self.trusted.post(path, {'reaction': first}))
+        self.ok(self.trusted.post(path, {'reaction': first}), 429)
 
     def test_profile_migration_preserves_existing_database(self):
         legacy = self.storage / 'legacy-profile-test.sqlite'
@@ -1226,7 +1436,7 @@ class ApiTests(unittest.TestCase):
         self.ok(self.guest.get(files[1]['download_url']))
         self.ok(self.guest.get(files[0]['download_url']), 404)  # Hashban purged this original.
 
-    def offline_cli(self, command):
+    def offline_cli(self, command, *args):
         # Run maintenance against an offline snapshot, as recommended in deployment docs.
         directory = tempfile.TemporaryDirectory(prefix='forbirds-cli-')
         self.addCleanup(directory.cleanup)
@@ -1235,7 +1445,7 @@ class ApiTests(unittest.TestCase):
         with sqlite3.connect(self.storage / 'forum.sqlite') as source, sqlite3.connect(target / 'forum.sqlite') as dest:
             source.backup(dest)
         source.close(); dest.close()
-        result = subprocess.run(self.php + ['bin/console.php', command], cwd=ROOT,
+        result = subprocess.run(self.php + ['bin/console.php', command, *args], cwd=ROOT,
                                 env={**self.env, 'FORBIRDS_STORAGE': str(target)}, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return target
@@ -1497,12 +1707,23 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["normal"]}'))['flag']['file'], 'Great-Britain.png')
 
     def test_static_layouts_assets_and_private_path_allowlist(self):
-        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/moderation.js', '/fingerprint.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
+        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
             self.ok(response)
             self.assertIn("script-src 'self'", response[2]['Content-Security-Policy'])
         for path in ['/src/PostingGuard.php', '/storage/app.key', '/static/preview/spolier.png-autosave.kra', '/static/../index.php', '/public/index.html']:
             self.ok(self.guest.get(path), 404)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_network_reactions(self):
+        images = self.reaction_images()
+        root = self.topic()
+        result = subprocess.run(['node', 'tests/test_network_reactions_browser.cjs'], cwd=ROOT,
+                                env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                                     'FORBIRDS_TEST_DB': str(self.storage / 'forum.sqlite'),
+                                     'FORBIRDS_REACTION_FIXTURE': json.dumps({'root': root, 'images': images})},
+                                text=True, capture_output=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
     def test_browser_moderation_tools(self):

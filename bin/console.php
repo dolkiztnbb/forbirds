@@ -10,8 +10,8 @@ if (PHP_SAPI !== 'cli') {
 $config = require dirname(__DIR__) . '/src/bootstrap.php';
 try {
     $command = $argv[1] ?? '';
-    if (!in_array($command, ['install', 'migrate', 'create-admin', 'prune-identities', 'reindex-media', 'purge-banned-media'], true)) {
-        throw new RuntimeException("Команды: install | migrate | create-admin USERNAME | prune-identities | reindex-media | purge-banned-media");
+    if (!in_array($command, ['install', 'migrate', 'create-admin', 'prune-identities', 'reindex-media', 'purge-banned-media', 'import-network-list', 'network-status', 'remove-network-ban'], true)) {
+        throw new RuntimeException("Команды: install | migrate | create-admin USERNAME | prune-identities | reindex-media | purge-banned-media | import-network-list tor|i2p FILE | network-status | remove-network-ban ID REASON");
     }
     umask(0077);
     foreach (['', '/sessions', '/uploads', '/previews', '/avatars'] as $directory) {
@@ -28,7 +28,22 @@ try {
     $db = Database::connect($config['database']);
     chmod($config['database'], 0600);
     Database::migrate($db);
-    if ($command === 'prune-identities') {
+    if ($command === 'import-network-list') {
+        $count = ForBirds\NetworkAccess::import($db, $argv[2] ?? '', $argv[3] ?? '');
+        echo "Imported $count network entries.\n";
+    } elseif ($command === 'network-status') {
+        foreach (['tor', 'i2p'] as $source) {
+            $stmt = $db->prepare('SELECT count(*) AS total,max(imported_at) AS updated FROM network_ranges WHERE source=?');
+            $stmt->execute([$source]); $row = $stmt->fetch();
+            echo $source . ': ' . $row['total'] . ' entries; updated: ' . ($row['updated'] ? gmdate('c', (int) $row['updated']) : 'NEVER') . "\n";
+            if (!$row['updated'] || time() - (int) $row['updated'] > 86400) echo "WARNING: list missing or older than 24 hours.\n";
+        }
+        echo "Active write restrictions (private operator output):\n";
+        foreach ($db->query('SELECT id,kind,value,source,reason FROM network_write_bans ORDER BY id') as $ban) echo json_encode($ban, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";
+    } elseif ($command === 'remove-network-ban') {
+        if (!ctype_digit($argv[2] ?? '') || !ForBirds\NetworkAccess::removeBan($db, (int) $argv[2], $argv[3] ?? '', null)) throw new RuntimeException('Ban not found or invalid ID.');
+        echo "Network write ban removed.\n";
+    } elseif ($command === 'prune-identities') {
         $db->prepare("UPDATE posts SET author_ip=NULL,browser_id=NULL,fingerprint=NULL WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days')")->execute();
         $db->prepare('DELETE FROM privacy_access WHERE created_at < ?')->execute([time() - 30 * 86400]);
         $db->prepare('DELETE FROM identity_bans WHERE expires_at <= ?')->execute([time()]);

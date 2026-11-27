@@ -262,5 +262,10 @@ export default {
   "Аудио под спойлером: ": "Spoiler audio: ",
   "Скачать аудио: ": "Download audio: ",
   "Если браузер не поддерживает формат аудио, скачайте оригинал.": "If your browser does not support this audio format, download the original.",
-  "Цитаты в начале строки: > зелёная, < оранжевая, ^ голубая.": "Quotes at the start of a line: > green, < orange, ^ light blue."
+  "Цитаты в начале строки: > зелёная, < оранжевая, ^ голубая.": "Quotes at the start of a line: > green, < orange, ^ light blue.",
+  "Для этого подключения, браузера или аккаунта доступно только чтение.": "This connection, browser or account has read-only access.",
+  "Реакции": "Reactions",
+  "Реакция: {label}": "Reaction: {label}",
+  "Автоблокировки Tor/I2P": "Tor/I2P automatic restrictions",
+  "Распознанным подключениям Tor/I2P доступно только чтение. Попытка записи сохраняет запрет для браузера и уже вошедшего аккаунта; ограничения и история их снятия хранятся для проверки администратором.": "Recognized Tor/I2P connections have read-only access. A write attempt records a restriction for the browser and any signed-in account; restrictions and removal history are retained for administrator review."
 };

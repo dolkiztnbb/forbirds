@@ -596,7 +596,14 @@ restrictions. GET/HEAD remain subject to normal authorization, not write bans.
 Summary items contain `{file,label,url,count,selected}`. Counts expose no voter
 identities; `selected` is only the current user's own state. One reaction per
 user per post, repeated assignment is idempotent; click on the selected reaction
-sends an empty string to remove it. No PoW/cooldown for reactions, but the existing
+sends an empty string to remove it. The UI shows only positive-count reactions
+under the post, with a separate **+** button opening an accessible chooser. The
+API still returns the complete catalog including zero counts so unused reactions
+remain selectable; the chooser itself shows images/labels, not zero counters.
+Escape, Close and backdrop dismiss it; a successful selection closes it and returns
+focus to the + button. Guests/read-only users cannot open the chooser or vote.
+No new migration is needed for this presentation change.
+No PoW/cooldown for reactions, but the existing
 IP write rate-limit and a dedicated 30 reaction requests/minute/IP limit apply.
 Ordinary account/identity/network bans all apply. Guests may see counts, not vote.
 Only approved posts with an approved thread root accept reactions. Locked threads

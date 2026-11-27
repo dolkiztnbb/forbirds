@@ -267,5 +267,7 @@ export default {
   "Реакции": "Reactions",
   "Реакция: {label}": "Reaction: {label}",
   "Автоблокировки Tor/I2P": "Tor/I2P automatic restrictions",
-  "Распознанным подключениям Tor/I2P доступно только чтение. Попытка записи сохраняет запрет для браузера и уже вошедшего аккаунта; ограничения и история их снятия хранятся для проверки администратором.": "Recognized Tor/I2P connections have read-only access. A write attempt records a restriction for the browser and any signed-in account; restrictions and removal history are retained for administrator review."
+  "Распознанным подключениям Tor/I2P доступно только чтение. Попытка записи сохраняет запрет для браузера и уже вошедшего аккаунта; ограничения и история их снятия хранятся для проверки администратором.": "Recognized Tor/I2P connections have read-only access. A write attempt records a restriction for the browser and any signed-in account; restrictions and removal history are retained for administrator review.",
+  "Добавить реакцию": "Add reaction",
+  "Выбрать реакцию": "Choose a reaction"
 };

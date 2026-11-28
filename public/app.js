@@ -1,14 +1,16 @@
 import { t, locale, initLanguage } from '/i18n.js';
 import { browserSignal } from '/ujutnenko.js';
 import { moderationUI } from '/moderation.js';
+import { renderMarkdown } from '/markdown.js';
 await initLanguage();
 
 const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
 const labels = { approved: t("Опубликовано"), pending: t("Ожидает проверки"), rejected: t("Отклонено"), deleted: t("Удалено") };
 const roleLabels = { user: t("Участник"), moderator: t("Модератор"), admin: t("Администратор") };
-let me = null, csrf = '', sections = [], composer = null, readOnly = false;
-const staff = () => me && !me.is_banned && ['moderator', 'admin'].includes(me.role);
+let me = null, csrf = '', sections = [], composer = null, readOnly = false, reactionEmojis = [];
+const presentation = () => !!window.ForBirdsPresentation?.enabled;
+const staff = () => !presentation() && me && !me.is_banned && ['moderator', 'admin'].includes(me.role);
 const admin = () => staff() && me.role === 'admin';
 const privacyNotice = document.createElement('details'); privacyNotice.className = 'privacy-notice';
 const privacySummary = document.createElement('summary'); privacySummary.textContent = t('Приватность и защита от спама');
@@ -40,7 +42,9 @@ function notify(value, isError = true) {
   notice.textContent = value instanceof Error ? value.message : String(value);
 }
 async function api(path, { method = 'GET', body } = {}) {
+  if (method !== 'GET' && presentation()) throw new Error(t('В режиме показа действия отключены.'));
   const headers = { 'Accept-Language': document.documentElement.lang };
+  if (presentation()) headers['X-ForBirds-Public-View'] = '1';
   if (signal) headers['X-ForBirds-Fingerprint'] = signal;
   if (method === 'POST') headers['X-CSRF-Token'] = csrf;
   if (body !== undefined && !(body instanceof FormData)) {
@@ -63,14 +67,14 @@ async function api(path, { method = 'GET', body } = {}) {
 }
 const post = (path, body = {}) => api(path, { method: 'POST', body });
 function applyReadOnly() {
-  if (!readOnly) return;
+  if (!readOnly && !presentation()) return;
   if (composer) { composer.cancel(); clearInterval(composer.timer); }
   for (const form of document.querySelectorAll('form[method="post"]')) {
     for (const input of form.querySelectorAll('input,textarea,select,button')) input.disabled = true;
   }
   for (const button of document.querySelectorAll('.mod-tools button, .reaction-button, .reaction-add, .reaction-option, #logout, #show-identity, #thread-settings input')) button.disabled = true;
   if ($('#composer')) $('#composer').hidden = true;
-  if (!$('#network-read-only')) {
+  if (readOnly && !$('#network-read-only')) {
     const notice = node('p', t('Для этого подключения, браузера или аккаунта доступно только чтение.'), 'read-only-notice');
     notice.id = 'network-read-only'; notice.setAttribute('role', 'status');
     document.querySelector('header').after(notice);
@@ -80,7 +84,7 @@ function reactionBar(item) {
   const bar = node('div', null, 'post-reactions');
   bar.setAttribute('aria-label', t('Реакции'));
   let reactions = item.reactions || [], busy = false, picker = null;
-  const unavailable = () => busy || readOnly || !me || !!me.is_banned || item.status !== 'approved';
+  const unavailable = () => busy || presentation() || readOnly || !me || !!me.is_banned || item.status !== 'approved';
   const updateControls = () => {
     for (const control of bar.querySelectorAll('button')) control.disabled = unavailable();
     for (const control of picker?.querySelectorAll('.reaction-option') || []) control.disabled = unavailable();
@@ -146,6 +150,32 @@ function reactionBar(item) {
     add.setAttribute('aria-haspopup', 'dialog'); bar.append(add); updateControls();
   };
   fill(); return bar;
+}
+function composerEmojis(textarea) {
+  const details = node('details', null, 'composer-emojis'); details.id = 'composer-emojis';
+  details.append(node('summary', t('Эмодзи из реакций')));
+  const choices = node('div', null, 'composer-emoji-options');
+  const seen = new Set();
+  for (const reaction of reactionEmojis) {
+    const code = reaction.file.replace(/\.[^.]+$/, '');
+    if (seen.has(code)) continue;
+    seen.add(code);
+    const token = ':' + code + ':';
+    const control = button('', async () => {
+      if (readOnly || presentation() || textarea.disabled) return;
+      textarea.focus({ preventScroll: true });
+      const start = textarea.selectionStart, end = textarea.selectionEnd;
+      if (textarea.value.length - (end - start) + token.length > textarea.maxLength) { notify(t('Достигнут лимит длины сообщения.')); return; }
+      textarea.setRangeText(token, start, end, 'end'); textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    control.className = 'composer-emoji'; control.title = reaction.label + ' ' + token;
+    control.setAttribute('aria-label', t('Вставить {code}', { code: token }));
+    const image = node('img'); image.src = reaction.url; image.alt = ''; image.loading = 'lazy';
+    control.append(image, node('span', token)); choices.append(control);
+  }
+  details.append(choices);
+  if (!seen.size) details.append(node('p', t('В каталоге пока нет эмодзи.')));
+  $('.markdown-help').after(details);
 }
 function date(value) { return new Date(value).toLocaleString(locale()); }
 function empty(container, text) { container.replaceChildren(node('p', text, 'empty')); }
@@ -293,14 +323,9 @@ function audioPlayer(file) {
   const player = node('div'); player.append(audio, fallback); return player;
 }
 function postBody(text) {
-  const body = node('div', null, 'post-body');
-  // textContent, not HTML: quote prefixes never enable markup or scripts.
-  const lines = text.split(/\r\n|\r|\n/);
-  lines.forEach((line, index) => {
-    if (index) body.append(document.createTextNode('\n'));
-    const color = { '>': 'green', '<': 'orange', '^': 'blue' }[line[0]];
-    body.append(color ? node('span', line, 'quote-' + color) : document.createTextNode(line));
-  });
+  const body = node('div', null, 'post-body markdown-body');
+  // Only fixed, locally bundled markdown-it output. Raw HTML and Markdown images are disabled; shortcode images use the local reaction catalog.
+  body.innerHTML = renderMarkdown(text, reactionEmojis);
   return body;
 }
 function flagBadge(flag) {
@@ -466,14 +491,15 @@ async function loadThread() {
     }
   }
   const section = sections.find(s => s.id === data.section_id);
-  const blocked = readOnly || !!me?.is_banned || (!staff() && (!!data.is_locked || !!section?.is_archived));
+  const blocked = presentation() || readOnly || !!me?.is_banned || (!staff() && (!!data.is_locked || !!section?.is_archived));
   $('#composer').hidden = blocked;
-  if (blocked) container.append(node('p', readOnly ? t('Для этого подключения, браузера или аккаунта доступно только чтение.') : me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации.")));
+  if (blocked && !presentation()) container.append(node('p', readOnly ? t('Для этого подключения, браузера или аккаунта доступно только чтение.') : me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации.")));
   if (!blocked && !composer) composer = new Composer(id);
 }
 async function loadDashboard() {
   const mode = params.get('mode') || 'new';
   const container = $('#dashboard-content'); container.replaceChildren();
+  if (presentation()) return;
   $('#composer').hidden = mode !== 'new' || readOnly || !!me?.is_banned;
   $('#section-admin').hidden = !admin() || mode !== 'new';
   if (mode === 'new') {
@@ -481,6 +507,18 @@ async function loadDashboard() {
     if (!sections.length) container.append(node('p', t("Сначала администратор должен добавить раздел ниже.")));
     if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
+  }
+  if (mode === 'falseflags') {
+    if (!admin()) { empty(container, t('Для этого действия нужны права администратора.')); return; }
+    const data = await api('/admin/falseflags?' + pageQuery());
+    if (!data.items.length) empty(container, t('Закрытый журнал пуст.'));
+    for (const entry of data.items) {
+      const row = node('p');
+      row.append(link('№' + entry.post_id, '/post.html?id=' + entry.thread_id + '#post-' + entry.post_id),
+        node('span', ` · ${date(entry.created_at)} · ${entry.actor_name} → ${entry.target_name} · ${entry.reason}`));
+      container.append(row);
+    }
+    paginate(data); return;
   }
   if (mode === 'media-bans' || mode === 'identity-bans' || mode === 'description-bans' || mode === 'network-bans') {
     paginate(await moderation.bans(container, mode)); return;
@@ -509,6 +547,7 @@ async function loadDashboard() {
   empty(container, t("Неизвестная вкладка."));
 }
 async function loadProfile() {
+  if (presentation() && !params.get('id')) return;
   const id = params.get('id') || (me ? String(me.id) : '');
   if (!/^[1-9][0-9]*$/.test(id)) throw new Error(t("Выберите пользователя или войдите, чтобы открыть свой профиль."));
   const user = await api('/users/' + id);
@@ -524,7 +563,7 @@ async function loadProfile() {
   const actions = $('#profile-actions'); actions.replaceChildren();
   if (staff()) actions.append(button(t("Права / бан пользователя"), () => profile(user.id)));
   actions.append(moderation.profileTools(user, staff() && user.id !== me.id && user.role !== 'admin' && (admin() || user.role === 'user')));
-  const own = me?.id === user.id;
+  const own = !presentation() && me?.id === user.id;
   $('#profile-editor').hidden = !own || !!me?.is_banned;
   if (own) {
     $('#profile-bio').value = user.description;
@@ -623,11 +662,23 @@ class Composer {
     this.threadId = threadId; this.files = []; this.proof = null; this.worker = null;
     this.until = 0; this.busy = false; this.interval = me ? 30 : 45; this.ready = false;
     this.form = $('#post-form');
+    composerEmojis(this.form.elements.body);
     $('#composer').hidden = false;
     $('#topic-fields').hidden = !!threadId;
     $('#publish-flags').hidden = !!threadId || !staff();
     $('#section-select').required = !threadId;
     this.form.elements.title.required = !threadId;
+    $('#falseflag-controls').hidden = !admin();
+    const attributionControls = () => {
+      const enabled = admin() && $('#falseflag-enabled').checked;
+      for (const input of [$('#falseflag-user'), $('#falseflag-reason')]) { input.disabled = !enabled || readOnly; input.required = enabled; }
+    };
+    $('#falseflag-enabled').checked = false;
+    $('#falseflag-enabled').addEventListener('change', attributionControls);
+    this.resetAttribution = () => {
+      $('#falseflag-enabled').checked = false; $('#falseflag-user').value = ''; $('#falseflag-reason').value = ''; attributionControls();
+    };
+    this.resetAttribution();
     $('#pow-start').addEventListener('click', () => this.solve().catch(notify));
     $('#pow-cancel').addEventListener('click', () => this.cancel(t("Проверка отменена.")));
     this.form.addEventListener('submit', event => { event.preventDefault(); this.submit().catch(notify); });
@@ -728,8 +779,16 @@ class Composer {
     this.files.forEach((entry, i) => { data.append('files[]', entry.file); if (entry.spoiler) data.append('spoilers[]', String(i)); });
     $('#post-result').textContent = t("Отправка…");
     try {
+      if (admin() && $('#falseflag-enabled').checked) {
+        const target = await api('/users/' + $('#falseflag-user').value);
+        if (!confirm(t('Опубликовать от имени {name}? Действие попадёт в закрытый журнал.', { name: target.username }))) {
+          $('#post-result').textContent = t('Публикация отменена.'); return;
+        }
+        data.set('post_as_user_id', String(target.id)); data.set('falseflag_reason', $('#falseflag-reason').value);
+      }
       const result = await post(this.threadId ? `/threads/${this.threadId}/replies` : '/threads', data);
       const message = t('Сообщение №{id}: {status}.', { id: result.post_id, status: labels[result.status] });
+      this.resetAttribution();
       this.form.elements.body.value = ''; this.files = []; this.renderFiles();
       this.cancel(t("Для следующей публикации нужна новая проверка."));
       // Never let a failed status refresh turn a successful POST into an apparent failure.
@@ -799,21 +858,49 @@ $('#auth-form').addEventListener('submit', async event => {
 $('#logout').addEventListener('click', async () => {
   try { await post('/auth/logout'); location.reload(); } catch (error) { notify(error); }
 });
+function presentationUI() {
+  const change = async () => {
+    if (!confirm(t('Переключить режим показа? Страницы в других вкладках тоже могут обновиться; сначала сохраните черновики.'))) return;
+    for (const dialog of document.querySelectorAll('dialog[open]:not(#language-dialog)')) dialog.close();
+    if (!window.ForBirdsPresentation?.set(!presentation())) {
+      alert(t('Не удалось сохранить режим показа. Разрешите локальное хранилище браузера.')); return;
+    }
+    window.location.reload();
+  };
+  const toggle = button(t('Режим показа'), change);
+  toggle.setAttribute('aria-keyshortcuts', 'Alt+Shift+M'); toggle.title = 'Alt+Shift+M';
+  document.addEventListener('keydown', event => {
+    if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'KeyM' && !event.repeat) { event.preventDefault(); change().catch(notify); }
+  });
+  toggle.id = 'presentation-toggle'; toggle.setAttribute('aria-pressed', presentation() ? 'true' : 'false');
+  $('#language-switch').after(toggle);
+  if (presentation() && (document.body.dataset.page === 'dashboard' || (document.body.dataset.page === 'profile' && !params.get('id')))) {
+    const hint = node('p', t('Страница скрыта в режиме показа.')); hint.id = 'presentation-hint';
+    document.querySelector('header').after(hint);
+  }
+}
 async function main() {
+  presentationUI();
   const session = await api('/session'); me = session.user; readOnly = !!session.read_only; identityUI();
-  moderation.setIdentity(session.privacy_enabled);
+  moderation.setIdentity(!presentation() && session.privacy_enabled);
+  reactionEmojis = await api('/reactions').catch(() => []);
   if ($('.dashboard-nav')) moderation.navigation($('.dashboard-nav'));
   await Promise.all([loadSections(), loadNews()]);
   await loadView(); adminSections(); applyReadOnly();
   let message;
   try { message = sessionStorage.getItem('forbirds-notice'); } catch { /* Storage disabled. */ }
-  if (message) {
+  if (message && !presentation()) {
     try { const notice = JSON.parse(message); notify(t('Сообщение №{id}: {status}.', { id: notice.id, status: labels[notice.status] }), false); } catch { /* Ignore obsolete notices. */ }
     sessionStorage.removeItem('forbirds-notice');
   }
+  document.documentElement.classList.add('presentation-ready');
   if (/^#post-[0-9]+$/.test(location.hash)) $(location.hash)?.scrollIntoView();
 }
 main().catch(error => {
+  if (presentation()) {
+    const hint = $('#presentation-hint') || node('p'); hint.id = 'presentation-hint';
+    hint.textContent = t('Страница недоступна в режиме показа.'); document.querySelector('header').after(hint); return;
+  }
   notify(error);
   const target = $('#feed') || $('#thread') || $('#profile-posts') || $('#dashboard-content');
   if (target) empty(target, error.message);

@@ -618,3 +618,92 @@ uploads, SVG or symlinks. Optional `reactions.json` maps filename stems to label
 Missing/removed images disappear from summaries without deleting votes; re-adding
 the file restores counts. README/dictionary/invalid files are not served by the
 PHP static router. Three original basic icons (like, heart, laugh) are included and may be replaced.
+
+## Admin attribution / falseflag and Markdown (migration 008)
+
+Existing POST `/api/threads` and `/api/threads/{id}/replies` accept two optional fields:
+
+```json
+{"post_as_user_id":42,"falseflag_reason":"Private reason for attribution"}
+```
+
+Only an authenticated, unbanned **administrator** may supply `post_as_user_id`;
+moderators/users receive 403 and guests 401. The ID must identify an existing user;
+no arbitrary names or new account creation. `falseflag_reason` is required (1–1000
+characters). When no attribution ID is supplied, posting is unchanged. The target
+can be any existing user, including staff, a banned user or the administrator;
+that account is a public attribution, not the source of authorization.
+
+CSRF, PoW, cooldown, rate limits, network restrictions and publication rights are
+checked against the **authenticated actor**, not the target. No session switch
+occurs. A falseflag post is approved immediately because its actor is an admin.
+The chosen user's `auto_approve`, bans, cooldown/proofs and sessions are unchanged.
+Root/reply moves, counts, bump/sage and file moderation follow ordinary post rules.
+
+`posts.user_id` becomes the selected public author. All ordinary post/thread/profile/
+section/feed responses and the target's `/api/me/posts` therefore show that user,
+with their current name, role, avatar and flag. There is no public falseflag marker,
+real-author field or change to ordinary API responses. A target account sees the
+attributed post in its own message lists; it does not receive the private reason
+or actual actor. Attachment names/bytes are not stripped of metadata by this feature.
+Existing private IP/browser fields still describe the real request and use existing
+admin-only identity access rules. This is not a guarantee of administrator anonymity.
+
+The new `falseflag_posts` table stores post ID, actor ID/name snapshot, target ID/name
+snapshot, reason and creation timestamp. It has no HTTP mutation endpoint. The
+record is inserted in the post transaction; proof/file/validation failure rolls
+back post, private record and cooldown together. Ordinary moderation status deletion
+preserves it. It is deliberately separate from moderator-visible `audit_log`, and
+not joined into `posts.*` queries. Only GET `/api/admin/falseflags` returns this
+paginated log (`page`, `limit`), with thread IDs for links. No moderator access,
+no privacy checkbox bypass; account privileges are checked on every request.
+Admins may browse this read-only log while their network is in read-only mode.
+Backups/DB administrators can access it; retain/protect it like other audit records.
+
+### Markdown presentation
+
+`body` remains raw text in JSON/storage; there is no server HTML field or new body
+format parameter. The frontend uses the pinned, locally bundled markdown-it parser
+with raw HTML, images and linkification disabled, no user plugins, max nesting 20,
+and only HTTP(S), mailto or relative links. Links carry nofollow/noopener/noreferrer.
+Headings, emphasis, strikethrough, lists, tables and code are rendered. No syntax
+highlighting, remote assets, task-list inputs or raw iframe/embed HTML are enabled.
+The site's `>`, `<`, `^` line-prefixes override ordinary Markdown blockquotes and
+retain their literal markers plus green/orange/blue styling. Fenced/indented code
+is parsed first and is never colored as a quote. Paragraph spacing now comes from
+Markdown blocks; raw newlines within a paragraph are rendered as line breaks.
+The same renderer applies to existing posts without rewriting their stored content.
+Profile descriptions, names, thread titles and compact excerpts are still plain text.
+
+Source: `frontend/markdown.js`; shipped asset: `/markdown.js`. To rebuild:
+`npm ci && npm run build:markdown`. Licenses are in `docs/MARKDOWN_LICENSES.txt`.
+Keep the shipped asset synchronized with source/lockfile; no npm install is needed
+on a production PHP-only server when deploying the committed asset.
+
+## Presentation/public reads and reaction shortcodes
+
+`GET` and attachment `HEAD` requests may include `X-ForBirds-Public-View: 1`.
+Except for `/api/session`, the request is evaluated as an unauthenticated reader:
+no pending/hidden/rejected content, private counts or moderator-only endpoints.
+This is a request-local permission downgrade, not a session change. `/api/session`
+retains the actual account/CSRF/privacy/read-only state; `POST` permissions, CSRF,
+network restrictions and authentication are unchanged by this header. Responses
+remain `no-store`. Ordinary clients that omit the header are unaffected.
+
+The frontend presentation toggle stores `forbirds-presentation` in browser storage,
+reloads, requests public data and disables all writes through its API wrapper. It
+hides dashboards, private controls and identity/account hints before data loads.
+This is screenshot hygiene, not an authentication boundary or anonymizer: public
+content and address-bar URLs remain visible. The API remains usable by the real
+session outside this UI. Deploy `/presentation.js`, the page heads, CSS, JS and PHP
+atomically; no new migration is needed.
+
+Post bodies may contain `:like:`-style reaction shortcodes. Names are exact,
+case-sensitive reaction filenames without their raster extension from
+`GET /api/reactions`. Duplicate stems resolve to the first catalog entry. Only
+catalog-backed local `/static/reactions/…` URLs can become inline images; arbitrary
+Markdown images remain disabled. The picker beside formatting help inserts raw
+codes at the caret. JSON/storage remain raw text, including unknown codes.
+Expansion happens only in Markdown inline text, including formatted text and
+colored quotes, never escaped colons, code or link destinations. Missing/removed
+catalog files leave codes as text. Profiles, titles and excerpts stay plain text.

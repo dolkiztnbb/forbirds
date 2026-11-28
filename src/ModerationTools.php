@@ -192,6 +192,11 @@ trait ModerationTools
 
     private function moderationGet(string $path): ?array
     {
+        if ($path === '/api/admin/falseflags') {
+            $this->requireAdmin();
+            return $this->page('SELECT f.*,p.thread_id FROM falseflag_posts f JOIN posts p ON p.id=f.post_id ORDER BY f.post_id DESC', []);
+        }
+
         if ($path === '/api/moderation/description-bans') {
             $this->requireStaff();
             return $this->page('SELECT id,reason,actor_id,created_at FROM description_bans ORDER BY id DESC', []);

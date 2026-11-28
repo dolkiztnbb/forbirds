@@ -202,7 +202,7 @@ class ApiTests(unittest.TestCase):
 
     def setUp(self):
         with sqlite3.connect(self.storage / 'forum.sqlite') as db:
-            for table in ['post_reactions', 'network_ranges', 'network_write_bans', 'network_ban_events', 'description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
+            for table in ['falseflag_posts', 'post_reactions', 'network_ranges', 'network_write_bans', 'network_ban_events', 'description_bans', 'privacy_access', 'identity_bans', 'media_bans', 'attachments', 'posts', 'threads', 'sections', 'audit_log', 'rate_limits', 'posting_limits', 'pow_challenges']:
                 db.execute(f'DELETE FROM {table}')
             db.execute("UPDATE users SET description = '', avatar_name = NULL, flag_file = NULL, avatar_locked = 0, description_locked = 0")
             db.execute("UPDATE users SET role = 'user', auto_approve = 0, is_banned = 0 WHERE role != 'admin'")
@@ -441,6 +441,115 @@ class ApiTests(unittest.TestCase):
         db.close()
         for _ in range(30): self.ok(self.trusted.post(path, {'reaction': first}))
         self.ok(self.trusted.post(path, {'reaction': first}), 429)
+
+    def test_falseflag_permissions_validation_and_csrf(self):
+        fields = {'section_id': self.section, 'title': 'Attribution', 'body': '**markdown**',
+                  'post_as_user_id': self.ids['normal'], 'falseflag_reason': 'Private attribution reason'}
+        for client in [self.guest, self.normal, self.mod]:
+            self.ok(client.post('/api/threads', fields), 401 if client is self.guest else 403)
+        self.ok(self.admin.request('POST', '/api/threads', data=fields, headers={'X-CSRF-Token': 'bad'}), 403)
+        self.ok(self.admin.post('/api/threads', {**fields, 'falseflag_reason': ''}), 422)
+        self.ok(self.admin.post('/api/threads', {**fields, 'post_as_user_id': '1 OR 1=1'}), 422)
+        self.ok(self.admin.post('/api/threads', {**fields, 'post_as_user_id': 999999999}), 404)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM posts').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM falseflag_posts').fetchone()[0], 0)
+        db.close()
+
+    def test_falseflag_root_reply_attribution_and_private_log(self):
+        self.ok(self.normal.upload('/api/me/profile', {'description': '', 'flag_file': 'ru.gif'},
+                                   [('avatar.png', (self.fixtures / 'wide.png').read_bytes())], file_field='avatar'))
+        fields = {'section_id': self.section, 'title': 'Private attribution', 'body': '**bold**\n> quote',
+                  'post_as_user_id': self.ids['normal'], 'falseflag_reason': 'secret-attribution-note'}
+        root = self.ok(self.admin.post('/api/threads', fields), 201)
+        reply = self.ok(self.admin.post(f'/api/threads/{root["thread_id"]}/replies', {
+            'body': 'Reply *italic*', 'post_as_user_id': self.ids['normal'], 'falseflag_reason': 'private-reply-note', 'sage': True}), 201)
+        self.assertEqual(root['status'], 'approved')
+        post = self.ok(self.guest.get(f'/api/posts/{root["post_id"]}'))
+        self.assertEqual(post['user_id'], self.ids['normal'])
+        self.assertEqual(post['username'], 'normal')
+        self.assertEqual(post['author_role'], 'user')
+        self.assertEqual(post['body'], fields['body'])  # raw Markdown stays in storage/API
+        self.assertEqual(post['flag']['file'], 'ru.gif')
+        self.assertIn(f'/api/users/{self.ids["normal"]}/avatar', post['avatar_url'])
+        self.assertEqual(self.ok(self.guest.get(f'/api/posts/{reply["post_id"]}'))['user_id'], self.ids['normal'])
+        self.assertIn(root['post_id'], [p['id'] for p in self.ok(self.normal.get('/api/me/posts'))['items']])
+        log = self.ok(self.admin.get('/api/admin/falseflags'))['items']
+        self.assertEqual(len(log), 2)
+        self.assertEqual(log[0]['reason'], 'private-reply-note')
+        self.assertEqual(log[0]['target_user_id'], self.ids['normal'])
+        self.assertEqual(log[0]['actor_name'], 'admin')
+        for client in [self.guest, self.normal, self.mod]: self.ok(client.get('/api/admin/falseflags'), 401 if client is self.guest else 403)
+        for client in [self.guest, self.normal, self.mod]:
+            for path in [f'/api/posts/{root["post_id"]}', f'/api/threads/{root["thread_id"]}', '/api/threads', '/api/sections', f'/api/users/{self.ids["normal"]}/posts']:
+                encoded = json.dumps(self.ok(client.get(path)))
+                for private in ['secret-attribution-note', 'private-reply-note', 'actor_name', 'target_user_id', 'falseflag', 'admin']:
+                    self.assertNotIn(private, encoded)
+        self.assertNotIn('secret-attribution-note', json.dumps(self.ok(self.mod.get('/api/moderation/audit'))))
+        self.ok(self.admin.post(f'/api/posts/{root["post_id"]}/moderate', {'action': 'delete'}))
+        self.assertEqual(len(self.ok(self.admin.get('/api/admin/falseflags'))['items']), 2)
+
+    def test_falseflag_uses_actor_proof_cooldown_and_network_restrictions(self):
+        fields = {'section_id': self.section, 'title': 'Actor proof', 'body': 'Attribution',
+                  'post_as_user_id': self.ids['normal'], 'falseflag_reason': 'proof-test'}
+        self.admin.auto_pow = False
+        self.ok(self.admin.post('/api/threads', fields), 422)
+        data = {**fields, **self.admin.proof(advance=True)}
+        root = self.ok(self.admin.post('/api/threads', data), 201)
+        cooldown = self.ok(self.admin.get('/api/posting-status'))
+        self.assertGreater(cooldown['retry_after'], 0)
+        self.assertEqual(self.ok(self.normal.get('/api/posting-status'))['retry_after'], 0)
+        self.ok(self.admin.post('/api/threads', {**data, 'post_as_user_id': self.ids['trusted']}), 429)
+        self.admin.auto_pow = False
+        self.network_range()
+        self.ok(self.admin.post('/api/threads', fields), 403)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM falseflag_posts').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT user_id FROM posts WHERE id=?', [root['post_id']]).fetchone()[0], self.ids['normal'])
+        db.close()
+
+    def test_falseflag_upload_failure_rolls_back_private_record_and_proof(self):
+        fields = {'section_id': self.section, 'title': 'Rollback attribution', 'body': 'bad image',
+                  'post_as_user_id': self.ids['normal'], 'falseflag_reason': 'rollback-private-note'}
+        self.ok(self.admin.upload('/api/threads', fields, [('bad.png', self.png_header(16, 16))]), 422)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM falseflag_posts').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM posts').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM threads').fetchone()[0], 0)
+        db.close()
+        self.assertEqual(self.ok(self.admin.get('/api/posting-status'))['retry_after'], 0)
+
+    def test_presentation_public_reads_hide_private_content_without_changing_session(self):
+        root = self.topic(title='Public presentation topic')
+        pending = self.ok(self.normal.upload('/api/threads', {
+            'section_id': self.section, 'title': 'presentation-private-root', 'body': 'private-body-presentation',
+        }, [('private.txt', b'private-file-presentation')]), 201)
+        reply = self.ok(self.normal.post(f'/api/threads/{root["thread_id"]}/replies', {'body': 'presentation-private-reply'}), 201)
+        file = self.ok(self.admin.get(f'/api/posts/{pending["post_id"]}'))['attachments'][0]
+        header = {'X-ForBirds-Public-View': '1'}
+        for path in ['/api/threads', '/api/sections', f'/api/threads/{root["thread_id"]}', f'/api/users/{self.ids["normal"]}/posts']:
+            ordinary = self.ok(self.guest.get(path))
+            public = self.ok(self.admin.request('GET', path, headers=header))
+            self.assertEqual(public, ordinary)
+            self.assertNotIn('presentation-private', json.dumps(public))
+        for path in [f'/api/posts/{pending["post_id"]}', f'/api/posts/{reply["post_id"]}', file['download_url']]:
+            self.ok(self.admin.request('GET', path, headers=header), 404)
+            self.ok(self.admin.get(path))
+        self.ok(self.admin.request('HEAD', file['download_url'], headers=header), 404)
+        for path in ['/api/moderation/queue', '/api/admin/falseflags', '/api/me/posts']:
+            self.ok(self.admin.request('GET', path, headers=header), 401)
+        session = self.ok(self.admin.request('GET', '/api/session', headers=header))
+        self.assertEqual(session['user']['role'], 'admin')
+        self.assertEqual(self.ok(self.admin.get('/api/session'))['user']['id'], session['user']['id'])
+
+    def test_presentation_header_does_not_grant_or_revoke_write_permissions(self):
+        header = {'X-ForBirds-Public-View': '1'}
+        fields = {'slug': 'public-view-write', 'title': 'Real permissions'}
+        self.ok(self.normal.request('POST', '/api/sections', data=fields, headers=header), 403)
+        self.ok(self.admin.request('POST', '/api/sections', data=fields, headers=header), 201)
+        root = self.topic(self.normal)
+        self.ok(self.normal.request('GET', f'/api/posts/{root["post_id"]}', headers=header), 404)
+        self.ok(self.normal.get(f'/api/posts/{root["post_id"]}'))
 
     def test_profile_migration_preserves_existing_database(self):
         legacy = self.storage / 'legacy-profile-test.sqlite'
@@ -1707,12 +1816,33 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["normal"]}'))['flag']['file'], 'Great-Britain.png')
 
     def test_static_layouts_assets_and_private_path_allowlist(self):
-        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
+        for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/presentation.js', '/markdown.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:
             response = self.guest.get(path)
             self.ok(response)
             self.assertIn("script-src 'self'", response[2]['Content-Security-Policy'])
         for path in ['/src/PostingGuard.php', '/storage/app.key', '/static/preview/spolier.png-autosave.kra', '/static/../index.php', '/public/index.html']:
             self.ok(self.guest.get(path), 404)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_presentation_emoji(self):
+        root = self.topic(self.normal, title='Public presentation topic', body='Public text :like:')
+        self.moderate(root['post_id'])
+        pending = self.topic(self.normal, title='PRIVATE-PRESENTATION-PENDING', body='PRIVATE-PRESENTATION-PENDING-BODY')
+        restricted = self.topic(title='PRIVATE-PRESENTATION-HIDDEN', body='PRIVATE-PRESENTATION-HIDDEN-BODY')
+        self.ok(self.mod.post(f'/api/posts/{restricted["post_id"]}/restrict', {'action': 'hide', 'reason': 'PRIVATE-PRESENTATION-REASON'}))
+        result = subprocess.run(['node', 'tests/test_presentation_emoji_browser.cjs'], cwd=ROOT,
+                                env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                                     'FORBIRDS_PRESENTATION_FIXTURE': json.dumps({'root': root, 'pending': pending, 'restricted': restricted, 'user_id': self.ids['normal']})},
+                                text=True, capture_output=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_falseflag_markdown(self):
+        result = subprocess.run(['node', 'tests/test_falseflag_markdown_browser.cjs'], cwd=ROOT,
+                                env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                                     'FORBIRDS_FALSEFLAG_FIXTURE': json.dumps({'target': self.ids['normal']})},
+                                text=True, capture_output=True, timeout=100)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
     def test_browser_network_reactions(self):

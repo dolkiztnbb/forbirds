@@ -38,6 +38,13 @@ final class Api
 
     public function dispatch(string $method, string $path): mixed
     {
+        // Request-local downgrade only: never changes the authenticated session or any write permission.
+        // The presentation UI requests public data to avoid leaking pending counts/snippets on screen.
+        if (in_array($method, ['GET', 'HEAD'], true) && $path !== '/api/session'
+            && ($_SERVER['HTTP_X_FORBIRDS_PUBLIC_VIEW'] ?? '') === '1') {
+            $this->user = null;
+        }
+
         if ($method === 'HEAD' && preg_match('~^/api/attachments/([1-9][0-9]*)/(download|preview|view)$~D', $path, $m)) {
             $this->attachment((int) $m[1], $m[2]);
         }
@@ -529,12 +536,28 @@ final class Api
         if (($news || $featured) && !$this->isStaff()) {
             throw new ApiError(403, 'forbidden', 'Размещение на главной и в новостях доступно персоналу.');
         }
+        $postAs = null;
+        $falseflagReason = null;
+        if (array_key_exists('post_as_user_id', $this->input)) {
+            $this->requireAdmin();
+            $postAs = $this->positiveInt($this->input['post_as_user_id']);
+            $falseflagReason = $this->text('falseflag_reason', 1, 1000);
+        }
         $sage = $threadId !== null && $this->boolean('sage', false);
         $files = $this->validateFiles();
         $moved = [];
         try {
-            return $this->transaction(function () use ($threadId, $body, $title, $sectionId, $news, $featured, $files, $sage, &$moved) {
+            return $this->transaction(function () use ($threadId, $body, $title, $sectionId, $news, $featured, $files, $sage, $postAs, $falseflagReason, &$moved) {
                 (new PostingGuard($this->db, $this->config, $this->user))->consume($this->input);
+                $target = null;
+                $actor = null;
+                if ($postAs !== null) {
+                    // Recheck privilege under the write lock. Attribution never changes the session/PoW subject.
+                    $actor = $this->one('SELECT * FROM users WHERE id=?', [$this->user['id']]);
+                    if (!$actor || $actor['is_banned'] || $actor['role'] !== 'admin') throw new ApiError(403, 'forbidden', 'Требуются права администратора.');
+                    $target = $this->one('SELECT id,username FROM users WHERE id=?', [$postAs]);
+                    if (!$target) $this->notFound();
+                }
                 $isRoot = $threadId === null;
                 if ($isRoot) {
                     $section = $this->one('SELECT * FROM sections WHERE id = ?', [$sectionId]);
@@ -564,11 +587,15 @@ final class Api
                 }
                 $status = $this->isStaff() || ($this->user && $this->user['auto_approve']) ? 'approved' : 'pending';
                 $this->run('INSERT INTO posts(thread_id,user_id,is_root,body,status,sage,bump_order,author_ip,browser_id,fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?)', [
-                    $threadId, $this->user['id'] ?? null, (int) $isRoot, $body, $status, (int) $sage,
+                    $threadId, $postAs ?? ($this->user['id'] ?? null), (int) $isRoot, $body, $status, (int) $sage,
                     $status === 'approved' && !$sage ? (int) $this->one('SELECT coalesce(max(bump_order),0)+1 AS n FROM posts')['n'] : 0,
                     $this->identity->ip, $this->identity->browser, $this->identity->fingerprint,
                 ]);
                 $id = (int) $this->db->lastInsertId();
+                if ($target) {
+                    $this->run('INSERT INTO falseflag_posts(post_id,actor_id,target_user_id,actor_name,target_name,reason) VALUES (?,?,?,?,?,?)',
+                        [$id, $actor['id'], $target['id'], $actor['username'], $target['username'], $falseflagReason]);
+                }
                 foreach ($files as $file) {
                     // Decode and screen only after a valid proof and cooldown check.
                     $file += MediaBans::hashes($file['tmp_name'], $file['mime']);

@@ -351,10 +351,27 @@ function flashPlayer(file) {
       frame.title = t('Flash: ') + file.original_name;
       frame.setAttribute('sandbox', 'allow-scripts'); frame.referrerPolicy = 'no-referrer';
       const active = frame; let sent = false;
+      const runtimeRequests = new Set();
+      const runtimeNames = new Set(['ruffle_web_bg.QDRSAAAZ.wasm', 'ruffle_web-wasm_mvp_bg.UMWKJ7EM.wasm']);
       const fail = () => { stop(); status.textContent = t('Не удалось запустить Flash. Возможно, файл несовместим или доступ к нему изменился.'); };
-      handler = event => {
+      handler = async event => {
         if (event.source !== active.contentWindow || event.origin !== 'null') return;
-        if (event.data?.type === 'forbirds-flash-ready' && !sent) {
+        if (event.data?.type === 'forbirds-flash-runtime-request' && sent) {
+          const name = event.data.name;
+          // Not a general URL proxy: one request per pinned public WASM build.
+          if (!runtimeNames.has(name) || runtimeRequests.has(name)) return;
+          runtimeRequests.add(name);
+          try {
+            const response = await fetch('/vendor/ruffle/' + name, { signal: current.signal, credentials: 'omit', redirect: 'error' });
+            if (!response.ok) throw new Error('Runtime unavailable');
+            const runtime = await response.arrayBuffer();
+            if (runtime.byteLength < 8 || runtime.byteLength > 20 * 1024 * 1024) throw new Error('Invalid runtime size');
+            if (current.signal.aborted || frame !== active) return;
+            active.contentWindow.postMessage({ type: 'forbirds-flash-runtime', name, bytes: runtime }, '*', [runtime]);
+          } catch {
+            if (!current.signal.aborted && frame === active) fail();
+          }
+        } else if (event.data?.type === 'forbirds-flash-ready' && !sent) {
           sent = true; active.contentWindow.postMessage({ type: 'forbirds-flash-load', bytes }, '*', [bytes]);
         } else if (event.data?.type === 'forbirds-flash-loaded' && sent) {
           clearTimeout(timeout); status.textContent = t('Flash запущен через Ruffle.');

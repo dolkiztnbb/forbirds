@@ -500,7 +500,12 @@ Ruffle **0.8.0** поставляется локально в `public/vendor/ruf
 без CDN и Adobe Flash-плагина. Запуск происходит в sandboxed iframe **без
 allow-same-origin**: Flash не получает доступ к DOM форума, cookie или storage.
 Сеть, переходы по URL и JavaScript-мост отключены в Ruffle. Из родительской
-страницы в sandbox передаются только уже авторизованно загруженные байты SWF;
+страницы в sandbox передаются уже авторизованно загруженные байты SWF и байты
+публичного WASM. CSS, bootstrap и закреплённый Ruffle JS встроены сервером в
+`/flash-player.html` с одноразовым CSP nonce. Sandbox не выполняет сетевых
+подзапросов (`connect-src 'none'`): только два точных имени WASM разрешены в
+мосте сообщений, по одному запросу каждого на запуск, без cookies и редиректов.
+Это обходит зависание загрузок из opaque iframe, не отключая его изоляцию.
 URL API, CSRF и сессия не передаются. Разрешение WebAssembly в CSP действует
 только на `/flash-player.html`, не на основной странице. CORS `*` включён только
 для публичных JS/WASM Ruffle, не для API или вложений.
@@ -513,7 +518,7 @@ URL API, CSRF и сессия не передаются. Разрешение We
 
 Для обновления локального runtime: измените точную версию `@ruffle-rs/ruffle`,
 выполните `npm ci && npm run vendor:ruffle`, синхронизируйте **точные имена WASM**
-в allowlist `src/StaticFiles.php`, тест целостности и закоммитьте runtime с
+в allowlist `src/StaticFiles.php`, `public/app.js`, `public/flash-player.js`, тест целостности и закоммитьте runtime с
 лицензиями. Не копируйте source maps или весь `node_modules`. В CI проверяется,
 что vendoring воспроизводим. На production Node/npm не требуются. Обновляйте PHP,
 HTML, JS/CSS и `public/vendor/ruffle` вместе; запросы должны проходить через

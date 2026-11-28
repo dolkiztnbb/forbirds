@@ -66,6 +66,22 @@ final class Api
         }
 
         if ($method === 'GET') {
+            if (preg_match('~^/api/threads/([1-9][0-9]*)/events$~D', $path, $match)) {
+                $public = ($_GET['public_view'] ?? '') === '1' || ($_SERVER['HTTP_X_FORBIRDS_PUBLIC_VIEW'] ?? '') === '1';
+                if ($public) $this->user = null;
+                $_GET['live'] = '1';
+                (new ThreadEvents($this->db, $this->config))->run(
+                    function (?string $sessionId) use ($public): string {
+                        if ($sessionId !== null) {
+                            session_id($sessionId);
+                            if (!session_start(['read_and_close' => true])) throw new RuntimeException('Cannot read stream session.');
+                        }
+                        $this->user = !$public && isset($_SESSION['user_id']) ? $this->one('SELECT * FROM users WHERE id=?', [$_SESSION['user_id']]) : null;
+                        return hash('sha256', json_encode([$this->user, $public ? false : $this->privacyEnabled()], JSON_THROW_ON_ERROR));
+                    },
+                    fn (): array => $this->thread((int) $match[1])
+                );
+            }
             $extra = $this->moderationGet($path);
             if ($extra !== null) return $extra;
             if ($path === '/api/session') {
@@ -522,6 +538,16 @@ final class Api
             WHERE p.thread_id = ? AND p.is_root = 0 AND $condition ORDER BY p.id", $params);
         $replies['items'] = array_map(fn ($post) => $this->postWithAttachments($post), $replies['items']);
         $thread['replies'] = $replies;
+        if (isset($_GET['live'])) {
+            if ($_GET['live'] !== '1') $this->invalid('Некорректный режим live.');
+            // A bounded live tail crosses pagination boundaries without navigating away or exposing hidden posts.
+            $tail = $this->all("SELECT p.*,u.username,u.role AS author_role,u.is_banned AS author_banned,u.avatar_name AS author_avatar_name,u.flag_file AS author_flag_file
+                FROM posts p LEFT JOIN users u ON u.id=p.user_id WHERE p.thread_id=? AND p.is_root=0 AND $condition ORDER BY p.id DESC LIMIT 20", $params);
+            $thread['section_archived'] = (int) $this->one('SELECT is_archived FROM sections WHERE id=?', [$thread['section_id']])['is_archived'];
+            $thread['live_tail'] = array_map(fn ($post) => $this->postWithAttachments($post), array_reverse($tail));
+            $thread['live_scope'] = hash('sha256', json_encode([$this->publicUser($this->user, true), $this->privacyEnabled()], JSON_THROW_ON_ERROR));
+            $thread['live_version'] = ThreadEvents::version($thread);
+        }
         return $thread;
     }
 

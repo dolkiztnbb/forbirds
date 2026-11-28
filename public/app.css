@@ -30,8 +30,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .post-status { font-size: 11px; font-style: italic; }
 .post-table[data-status=pending] { border-style: dashed; }
 .post-table[data-status=pending] .post-status { font-weight: bold; color: #7a4b00; }
-.mod-tools { margin-top: 5px; }
-.mod-tools button { margin: 1px; }
+/* Deliberately sober, separate operational panels, not floating decorative links. */
+.mod-tools { float: none; clear: both; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; margin: 10px 0 6px; padding: 9px 10px; border: 1px solid #8e969d; border-left: 3px solid #4b5965; background: #eef0f2; color: #26333d; text-align: left; }
+.mod-tools legend { padding: 0 5px; font-size: 11px; font-weight: bold; font-style: normal; letter-spacing: .04em; }
+.mod-tools button { max-width: 100%; overflow-wrap: anywhere; margin: 0; min-height: 30px; padding: 5px 9px; border: 1px solid #7b858e; border-radius: 2px; background: #fff; color: #26333d; font-size: 11px; font-weight: bold; box-shadow: none; }
+.mod-tools button:hover:not(:disabled) { background: #dce2e6; border-color: #3d4c58; }
+.mod-tools .mod-primary { background: #344956; border-color: #344956; color: #fff; }
+.mod-tools .mod-primary:hover:not(:disabled) { background: #243440; color: #fff; }
+.mod-tools .mod-danger { color: #8b2828; border-color: #b78080; }
+.mod-tools .mod-danger:hover:not(:disabled) { background: #f7e4e4; border-color: #8b2828; }
+.mod-tools button:disabled { opacity: .45; }
+.attachments .mod-tools { max-width: 520px; }
+.thread-live { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; padding: 5px 0; font-size: 11px; color: #44545f; }
+.thread-tail { margin-top: 16px; border-top: 2px solid #8e969d; }
+.thread-tail h3 { font-size: 12px; }
+.banner-placeholder.has-banner { background-image: none; }
+.site-banner { display: block; width: 100%; height: 100%; object-fit: contain; }
 .post-links { margin: 5px 0; border-top: 1px solid #000; padding-top: 3px; }
 .attachments { margin-top: 5px; }
 .file-box { box-sizing: border-box; width: 110px; min-height: 100px; height: auto; margin: 2px; overflow-wrap: anywhere; }

@@ -128,6 +128,10 @@ class ApiTests(unittest.TestCase):
         cls.storage = Path(cls.temp.name)
         Client.fixture_storage = cls.storage
         cls.env = {**os.environ, 'FORBIRDS_UPDATES_ENABLED': '1' if getattr(cls, 'updates_enabled', False) else '0', 'FORBIRDS_STORAGE': str(cls.storage), 'FORBIRDS_SECURE_COOKIE': '0', 'FORBIRDS_POW_DIFFICULTY': '8'}
+        # Live streams must not monopolize the only development-server worker.
+        cls.env.setdefault('PHP_CLI_SERVER_WORKERS', '4')
+        # Unrelated browser suites may open many tabs; only the dedicated live suite holds streams.
+        cls.env['FORBIRDS_LIVE_ENABLED'] = '1' if getattr(cls, 'live_enabled', False) else '0'
         cls.php = shlex.split(os.environ.get('PHP_BIN', 'php'))
         for args, stdin in [(['install'], None), (['migrate'], None),
                             (['create-admin', 'admin'], PASSWORD + '\n')]:
@@ -267,6 +271,102 @@ class ApiTests(unittest.TestCase):
             if enabled:
                 db.execute('INSERT INTO network_ranges VALUES (?,?,?)', [source, '127.0.0.1/32', int(time.time())])
         db.close()
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_live_dom(self):
+        topic = self.topic()
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.executemany("INSERT INTO posts(thread_id,body,status) VALUES (?,?,'approved')",
+                           [(topic['thread_id'], f'Older reply {index}') for index in range(20)])
+            db.execute('UPDATE posting_limits SET last_post_at = 0')
+        db.close()
+        result = subprocess.run(['node', 'tests/test_live_browser.cjs'], cwd=ROOT,
+            env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                 'FORBIRDS_LIVE_FIXTURE': json.dumps(topic)}, text=True, capture_output=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_post_cache_etags_revalidate_visibility_and_viewers(self):
+        topic = self.topic()
+        path = f'/api/posts/{topic["post_id"]}'
+        first = self.guest.get(path)
+        self.ok(first)
+        tag = first[2].get('ETag')
+        self.assertTrue(tag)
+        self.assertIn('private', first[2]['Cache-Control'])
+        self.assertIn('must-revalidate', first[2]['Cache-Control'])
+        self.assertIn('Cookie', first[2]['Vary'])
+        unchanged = self.guest.request('GET', path, headers={'If-None-Match': tag})
+        self.ok(unchanged, 304)
+        self.assertEqual(unchanged[1], b'')
+        self.ok(self.guest.request('GET', path, headers={'If-None-Match': '"other", W/' + tag}), 304)
+        self.assertNotEqual(self.ok(self.admin.get(path))['id'], 0)
+        self.ok(self.admin.request('GET', path, headers={'If-None-Match': tag}))
+        self.ok(self.guest.request('GET', path, headers={'If-None-Match': tag, 'Accept-Language': 'en'}))
+        thread_path = f'/api/threads/{topic["thread_id"]}?live=1'
+        thread = self.guest.get(thread_path)
+        self.ok(self.guest.request('GET', thread_path, headers={'If-None-Match': thread[2]['ETag']}), 304)
+        reply = self.ok(self.mod.post(f'/api/threads/{topic["thread_id"]}/replies', {'body': 'Cache invalidation reply'}), 201)
+        changed = self.guest.request('GET', thread_path, headers={'If-None-Match': thread[2]['ETag']})
+        self.assertEqual(self.ok(changed)['live_tail'][0]['id'], reply['post_id'])
+        self.assertNotEqual(changed[2]['ETag'], thread[2]['ETag'])
+        # Deleted/hidden posts must never be resurrected by If-None-Match or '*'.
+        self.moderate(topic['post_id'], 'unapprove')
+        denied = self.guest.request('GET', path, headers={'If-None-Match': tag})
+        self.ok(denied, 404)
+        self.assertIn('no-store', denied[2]['Cache-Control'])
+        self.ok(self.guest.request('GET', path, headers={'If-None-Match': '*'}), 404)
+        staff = self.mod.get(path)
+        self.ok(staff)
+        self.ok(self.mod.request('GET', path, headers={'If-None-Match': staff[2]['ETag']}), 304)
+        self.ok(self.mod.request('GET', path, headers={'If-None-Match': staff[2]['ETag'], 'X-ForBirds-Public-View': '1'}), 404)
+        self.ok(self.admin.post(f'/api/users/{self.ids["moderator"]}/role', {'role': 'user'}))
+        self.ok(self.mod.request('GET', path, headers={'If-None-Match': staff[2]['ETag']}), 404)
+        for excluded in ['/api/session', '/api/moderation/queue']:
+            self.assertIsNone(self.admin.get(excluded)[2].get('ETag'))
+
+    def test_live_snapshot_visibility_tail_version_and_public_downgrade(self):
+        topic = self.topic()
+        path = f'/api/threads/{topic["thread_id"]}?live=1'
+        before = self.ok(self.guest.get(path))
+        self.assertRegex(before['live_version'], r'^[a-f0-9]{64}$')
+        pending = self.ok(self.normal.post(f'/api/threads/{topic["thread_id"]}/replies', {'body': 'Pending live secret'}), 201)
+        visitor = self.ok(self.guest.get(path))
+        self.assertEqual(visitor['live_tail'], [])
+        self.assertEqual(before['live_version'], visitor['live_version'])
+        own = self.ok(self.normal.get(path))
+        self.assertEqual(own['live_tail'][0]['id'], pending['post_id'])
+        self.assertEqual(len(self.ok(self.mod.get(path))['live_tail']), 1)
+        public = self.ok(self.mod.request('GET', path, headers={'X-ForBirds-Public-View': '1'}))
+        self.assertEqual(public['live_version'], visitor['live_version'])
+        self.moderate(pending['post_id'])
+        published = self.ok(self.guest.get(path))
+        self.assertNotEqual(published['live_version'], visitor['live_version'])
+        self.assertEqual(published['live_tail'][0]['id'], pending['post_id'])
+        self.assertNotIn('author_ip', json.dumps(published))
+        self.assertNotIn('live_tail', self.ok(self.guest.get(path.split('?')[0])))
+        # A full page still receives the newest replies in its bounded live tail.
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.executemany("INSERT INTO posts(thread_id,body,status) VALUES (?,?,'approved')",
+                           [(topic['thread_id'], f'Live {index}') for index in range(22)])
+        db.close()
+        snapshot = self.ok(self.guest.get(path))
+        self.assertEqual(len(snapshot['replies']['items']), 20)
+        self.assertTrue(snapshot['replies']['has_more'])
+        self.assertEqual(len(snapshot['live_tail']), 20)
+        self.assertGreater(snapshot['live_tail'][-1]['id'], snapshot['replies']['items'][-1]['id'])
+        self.assertEqual(snapshot['live_version'], self.ok(self.guest.get(path))['live_version'])
+
+    def test_banner_api_and_live_scripts(self):
+        result = self.ok(self.guest.get('/api/banner'))
+        self.assertTrue(result['url'].startswith('/static/'))
+        self.assertEqual(result['next_change_at'] % 60, 0)
+        self.assertTrue(0 < result['next_change_at'] - result['server_time'] <= 60)
+        self.assertEqual(self.ok(self.guest.get('/api/banner'))['url'], result['url'])
+        self.ok(self.guest.get(result['url']))
+        for script in ['/banners.js', '/live-thread.js']:
+            response = self.guest.get(script)
+            self.ok(response)
+            self.assertIn('javascript', response[2]['Content-Type'])
 
     def test_network_read_only_covers_all_posts_and_preserves_reads(self):
         root = self.topic()

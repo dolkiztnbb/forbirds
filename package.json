@@ -2,15 +2,17 @@
   "name": "forbirds-frontend-tests",
   "private": true,
   "scripts": {
-    "test": "node tests/test_hash.cjs && node tests/test_i18n.cjs && node tests/test_markdown.cjs && node tests/test_presentation.cjs",
+    "test": "node tests/test_hash.cjs && node tests/test_i18n.cjs && node tests/test_markdown.cjs && node tests/test_presentation.cjs && node tests/test_section_state.cjs && node tests/test_ruffle.cjs",
     "test:browser": "FORBIRDS_BROWSER=1 python3 -m unittest discover -s tests -k test_browser -v",
-    "build:markdown": "esbuild frontend/markdown.js --bundle --format=esm --platform=browser --minify --legal-comments=inline --outfile=public/markdown.js"
+    "build:markdown": "esbuild frontend/markdown.js --bundle --format=esm --platform=browser --minify --legal-comments=inline --outfile=public/markdown.js",
+    "vendor:ruffle": "node scripts/vendor-ruffle.cjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
     "playwright-core": "1.65.1"
   },
   "dependencies": {
+    "@ruffle-rs/ruffle": "0.8.0",
     "markdown-it": "^15.0.3"
   }
 }

@@ -10,7 +10,8 @@
         "ext-gd": "*",
         "ext-mbstring": "*",
         "ext-ctype": "*",
-        "ext-session": "*"
+        "ext-session": "*",
+        "ext-zlib": "*"
     },
     "scripts": {
         "test": "python3 -m unittest discover -s tests -v"

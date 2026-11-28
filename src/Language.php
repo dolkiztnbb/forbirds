@@ -7,6 +7,7 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Некорректный SWF. Поддерживаются FWS и CWS, до 32 МиБ после распаковки.' => 'Invalid SWF. FWS and CWS are supported, up to 32 MiB after decompression.',
         'Для этого подключения, браузера или аккаунта доступно только чтение.' => 'This connection, browser or account has read-only access.',
         'Неизвестная реакция.' => 'Unknown reaction.',
         'Реакции для этого сообщения недоступны.' => 'Reactions are unavailable for this post.',

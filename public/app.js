@@ -2,6 +2,7 @@ import { t, locale, initLanguage } from '/i18n.js';
 import { browserSignal } from '/ujutnenko.js';
 import { moderationUI } from '/moderation.js';
 import { renderMarkdown } from '/markdown.js';
+import { sectionOpen, rememberSection } from '/section-state.js';
 await initLanguage();
 
 const $ = selector => document.querySelector(selector);
@@ -211,7 +212,11 @@ async function loadSections() {
   for (const section of sections) {
     const details = node('details');
     const summary = node('summary'); summary.append(link(section.title + (section.is_archived ? t(" [архив]") : ''), '/index.html?section_id=' + section.id));
-    details.className = 'section-item'; details.open = true;
+    details.className = 'section-item'; details.dataset.sectionId = section.id;
+    details.open = sectionOpen(section.id);
+    details.addEventListener('toggle', () => {
+      if (details.isConnected && sectionOpen(section.id) !== details.open) rememberSection(section.id, details.open);
+    });
     details.append(summary);
     if (section.description) details.append(node('p', section.description, 'section-description'));
     const recent = node('ol', null, 'section-recent'); recent.setAttribute('aria-label', t("Последние сообщения: ") + section.title);
@@ -302,6 +307,57 @@ function showImage(file) {
   document.body.append(dialog); document.body.classList.add('viewer-open');
   dialog.showModal(); close.focus(); image.src = file.view_url;
 }
+function flashPlayer(file) {
+  const box = node('div', null, 'flash-player');
+  const status = node('p', t('Flash запускается через Ruffle. Поддерживаются не все файлы; сеть и доступ к странице отключены.'));
+  status.setAttribute('role', 'status');
+  let frame = null, request = null, timeout = null, handler = null, observer = null;
+  const clear = () => {
+    clearTimeout(timeout); request?.abort(); request = null;
+    if (handler) window.removeEventListener('message', handler); handler = null;
+  };
+  const stop = () => {
+    clear(); observer?.disconnect(); observer = null; frame?.remove(); frame = null;
+    start.disabled = false; end.hidden = true;
+  };
+  box.stop = stop;
+  const start = button(t('Запустить Flash'), async () => {
+    stop(); start.disabled = true; end.hidden = false; status.textContent = t('Загрузка Flash…');
+    request = new AbortController(); const current = request;
+    try {
+      // Fetch through the authenticated API in the parent, never expose session/token to the sandbox.
+      const response = await fetch(file.view_url, { signal: current.signal, headers: presentation() ? { 'X-ForBirds-Public-View': '1' } : {} });
+      if (!response.ok) throw new Error();
+      const bytes = await response.arrayBuffer();
+      if (current.signal.aborted || !box.isConnected) return;
+      if (bytes.byteLength < 15 || bytes.byteLength > 5 * 1024 * 1024) throw new Error();
+      frame = node('iframe', null, 'attachment-flash');
+      frame.title = t('Flash: ') + file.original_name;
+      frame.setAttribute('sandbox', 'allow-scripts'); frame.referrerPolicy = 'no-referrer';
+      const active = frame; let sent = false;
+      const fail = () => { stop(); status.textContent = t('Не удалось запустить Flash. Возможно, файл несовместим или доступ к нему изменился.'); };
+      handler = event => {
+        if (event.source !== active.contentWindow || event.origin !== 'null') return;
+        if (event.data?.type === 'forbirds-flash-ready' && !sent) {
+          sent = true; active.contentWindow.postMessage({ type: 'forbirds-flash-load', bytes }, '*', [bytes]);
+        } else if (event.data?.type === 'forbirds-flash-loaded' && sent) {
+          clearTimeout(timeout); status.textContent = t('Flash запущен через Ruffle.');
+        } else if (event.data?.type === 'forbirds-flash-error') fail();
+      };
+      window.addEventListener('message', handler);
+      timeout = setTimeout(fail, 60000);
+      frame.src = '/flash-player.html'; box.append(frame);
+      observer = new MutationObserver(() => { if (!box.isConnected) stop(); });
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch {
+      if (current.signal.aborted || !box.isConnected) return;
+      stop(); status.textContent = t('Не удалось запустить Flash. Возможно, файл несовместим или доступ к нему изменился.');
+    }
+  });
+  const end = button(t('Остановить Flash'), async () => { stop(); status.textContent = t('Flash остановлен.'); }); end.hidden = true;
+  window.addEventListener('pagehide', stop, { once: true });
+  box.append(start, end, status); return box;
+}
 function videoPlayer(file) {
   const video = node('video', null, 'attachment-video');
   video.controls = true; video.preload = 'none'; video.playsInline = true;
@@ -365,7 +421,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   if (item.attachments?.length) {
     const files = node('div', null, 'attachments');
     for (const file of item.attachments) {
-      const box = node('div', null, (file.is_image ? 'image-box' : file.is_video ? 'video-box' : file.is_audio ? 'audio-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
+      const box = node('div', null, (file.is_image ? 'image-box' : file.is_video ? 'video-box' : file.is_audio ? 'audio-box' : file.is_flash ? 'flash-box' : 'file-box') + (file.spoiler ? ' spoiler' : ''));
       if (staff()) box.append(moderation.fileTools(file));
       if (!file.download_url) {
         box.append(node('p', file.original_name + ' · ' + (file.blocked ? t('Файл заблокирован') : file.moderation_state === 'deleted' ? t('Файл удалён') : t('Файл скрыт'))));
@@ -385,6 +441,14 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
         image.loading = 'lazy';
         open.append(image); box.append(open, node('div', file.original_name));
         box.append(link(t("Скачать полноразмерную картинку"), file.download_url));
+      } else if (file.is_flash) {
+        const player = flashPlayer(file);
+        if (file.spoiler) {
+          const details = node('details'); details.append(node('summary', t('Flash под спойлером: ') + file.original_name), player);
+          details.addEventListener('toggle', () => { if (!details.open) player.stop(); });
+          box.append(details);
+        } else box.append(node('div', file.original_name), player);
+        box.append(link(t('Скачать Flash: ') + file.original_name, file.download_url));
       } else if (file.is_audio) {
         if (file.spoiler) {
           const details = node('details'), summary = node('summary', t('Аудио под спойлером: ') + file.original_name);

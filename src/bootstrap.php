@@ -12,6 +12,7 @@ require_once __DIR__ . '/Reactions.php';
 require_once __DIR__ . '/Api.php';
 require_once __DIR__ . '/ImagePreview.php';
 require_once __DIR__ . '/MediaFile.php';
+require_once __DIR__ . '/FlashFile.php';
 require_once __DIR__ . '/FlagCatalog.php';
 require_once __DIR__ . '/PostingGuard.php';
 require_once __DIR__ . '/StaticFiles.php';

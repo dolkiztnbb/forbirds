@@ -707,3 +707,77 @@ codes at the caret. JSON/storage remain raw text, including unknown codes.
 Expansion happens only in Markdown inline text, including formatted text and
 colored quotes, never escaped colons, code or link destinations. Missing/removed
 catalog files leave codes as text. Profiles, titles and excerpts stay plain text.
+
+## Flash attachments (Ruffle)
+
+Uploads through the existing thread/reply multipart endpoints now accept `.swf`
+(case-insensitive extension). The server validates FWS and CWS/zlib containers:
+version/header, declared and actual uncompressed length, RECT/frame header and
+bounded tag records through End. Maximum uncompressed length: 32 MiB; ordinary
+5 MiB/file, 20 MiB/post and 10-file limits still apply. Fake/truncated containers,
+size mismatches and ZWS/LZMA return `422`. This is bounded structural validation,
+not ActionScript verification or a guarantee of Ruffle compatibility. Requires
+PHP zlib; no schema migration.
+
+Each attachment now also includes `is_flash:boolean`. A visible SWF has
+`is_flash:true`, `is_image/is_video/is_audio:false`, `preview_url:null` and a
+`view_url` of `/api/attachments/{id}/view`. Stored MIME is normalized to
+`application/x-shockwave-flash`, but **both `/view` and `/download` serve SWF as
+`application/octet-stream`, `Content-Disposition: attachment`**, never plugin
+content or HTML. `/preview` returns 404. HEAD/ranges, no-store, nosniff, parent
+visibility, premoderation and file/hash bans use the existing attachment checks.
+
+On explicit Start, the parent fetches bytes with the current session (and public
+view header in presentation mode), then transfers an ArrayBuffer via a
+source-checked postMessage handshake to `/flash-player.html`. The player has an
+opaque origin (`sandbox="allow-scripts"`, also enforced by HTTP CSP); it receives
+no API URL, tokens or account data. Ruffle's networking, URL opening and script
+access are disabled. Stop, spoiler closing and removal of the post destroy the
+iframe; already downloaded bytes cannot be retroactively revoked.
+
+The exact pinned local Ruffle JS/WASM assets alone allow CORS `*` so that an
+opaque sandbox can fetch its runtime. API/attachment CORS stays disabled. The
+player's CSP alone permits `wasm-unsafe-eval` and inline runtime styles; the forum
+page keeps its existing script restrictions and permits same-origin frames.
+External Flash resources, persistence and website JavaScript integration are not
+supported. See README for runtime update/deployment instructions and licenses.
+
+Sidebar disclosure preferences are frontend-only per-section browser storage;
+there is no new preference endpoint or change to section API visibility/counts.
+
+## Operator-enabled site updates
+
+- `GET /api/admin/update`: administrator only; returns `enabled`, `maintenance`
+  and the latest job (`id`, `status`, `phase`, timestamps, optional `before`/`after`
+  commit IDs and a fixed error code). Initial status: `idle`. No raw command
+  output, filesystem paths, remotes, actor details or credentials are returned.
+- `POST /api/admin/update`: administrator only, ordinary CSRF/network/account
+  restrictions, current `password` (12–72 bytes), exact `confirm:"UPDATE"`.
+  Extra keys (including branch/remote/command/path) are rejected. At most five
+  attempts per five minutes through the normal persistent rate limiter.
+  Success: **202**, `status:"queued"`, random job ID. It does not claim the site
+  was updated. A single queued/running job or unrecovered maintenance: **409**.
+  Bad password: **403**. Disabled by default: **503** (`updates_disabled`).
+
+The HTTP handler only saves a private job and audit event (`site.update.requested`);
+it never spawns a process. With `FORBIRDS_UPDATES_ENABLED=1`, an operator-scheduled
+native PHP `bin/update.php` worker uses fixed argv commands without a shell:
+preflight clean `main`, SQLite VACUUM INTO snapshot, fast-forward-only pull from
+`origin main`, then a fresh `PHP_BINARY bin/console.php migrate` process with the
+same storage. Migration is never attempted after pull failure. No arbitrary
+request-supplied options or automatic merge/stash/reset are supported.
+
+Job states: `idle`, `queued`, `running`, `succeeded`, `failed`. Phases: `queued`,
+`preflight`, `maintenance`, `backup`, `pull`, `migrate`, `complete`. Busy worker and
+ordinary API requests coordinate through flock; after the maintenance marker is
+set, new ordinary GET/POST/HEAD requests fail **503**, including attachments.
+The worker drains existing requests before backup/pull. Static assets and GET
+`/api/session`/`/api/admin/update` remain available for the administrator status
+page, subject to brief SQLite locks. Public-view reads still downgrade identity,
+so they cannot access admin status. Presentation mode hides this page entirely.
+
+Pull/migration timeout or failure leaves maintenance enabled for operator repair;
+no unsafe automatic rollback is attempted. Crashes require manual examination.
+Private snapshot/log/state files are below `storage/site-update/`, outside public;
+no new database migration is needed for this feature. Deployment permissions,
+cron/Docker setup, OPcache requirements and recovery: **UPDATES.md**.

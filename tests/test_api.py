@@ -29,6 +29,26 @@ ROOT = Path(__file__).resolve().parents[1]
 PASSWORD = "ForBirds-test-password-123!"
 
 
+def flash_fixture(compressed=False, actions=False):
+    # Tiny self-contained AVM1 movie: 320x240, red stage, one frame.
+    bits = '01110' + ''.join(format(value & 16383, '014b') for value in [0, 6400, 0, 4800])
+    bits += '0' * ((-len(bits)) % 8)
+    rect = int(bits, 2).to_bytes(len(bits) // 8, 'big')
+    def tag(code, data):
+        return struct.pack('<H', code << 6 | (len(data) if len(data) < 63 else 63)) + (struct.pack('<I', len(data)) if len(data) >= 63 else b'') + data
+    body = rect + struct.pack('<HH', 12 << 8, 1) + tag(9, b'\xff\x00\x00')
+    if actions:
+        script = b''
+        for url, target in [(b'javascript:parent.FLASH_ESCAPED=true', b'_self'),
+                            (b'https://example.org/flash-must-not-load', b'_blank'),
+                            (b'https://example.org/flash-must-not-load.swf', b'_level1')]:
+            payload = url + b'\0' + target + b'\0'
+            script += b'\x83' + struct.pack('<H', len(payload)) + payload
+        body += tag(12, script + b'\0')
+    body += tag(1, b'') + tag(0, b'')
+    return (b'CWS' if compressed else b'FWS') + b'\x08' + struct.pack('<I', len(body) + 8) + (zlib.compress(body) if compressed else body)
+
+
 class Client:
     def __init__(self, base):
         self.base = base
@@ -107,7 +127,7 @@ class ApiTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix='forbirds-tests-')
         cls.storage = Path(cls.temp.name)
         Client.fixture_storage = cls.storage
-        cls.env = {**os.environ, 'FORBIRDS_STORAGE': str(cls.storage), 'FORBIRDS_SECURE_COOKIE': '0', 'FORBIRDS_POW_DIFFICULTY': '8'}
+        cls.env = {**os.environ, 'FORBIRDS_UPDATES_ENABLED': '1' if getattr(cls, 'updates_enabled', False) else '0', 'FORBIRDS_STORAGE': str(cls.storage), 'FORBIRDS_SECURE_COOKIE': '0', 'FORBIRDS_POW_DIFFICULTY': '8'}
         cls.php = shlex.split(os.environ.get('PHP_BIN', 'php'))
         for args, stdin in [(['install'], None), (['migrate'], None),
                             (['create-admin', 'admin'], PASSWORD + '\n')]:
@@ -1814,6 +1834,95 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.ok(self.guest.get(flags[name]['url'])), (ROOT / 'public' / 'flags' / name).read_bytes())
         self.ok(self.normal.post('/api/me/profile', {'flag_file': 'Great-Britain.png'}))
         self.assertEqual(self.ok(self.guest.get(f'/api/users/{self.ids["normal"]}'))['flag']['file'], 'Great-Britain.png')
+
+    def test_flash_upload_validation_visibility_and_moderation(self):
+        fields = {'section_id': self.section, 'title': 'Flash upload', 'body': 'Flash body'}
+        for compressed in [False, True]:
+            data = flash_fixture(compressed)
+            root = self.ok(self.normal.upload('/api/threads', fields, [('movie.SWF', data)]), 201)
+            file = self.ok(self.admin.get(f'/api/posts/{root["post_id"]}'))['attachments'][0]
+            self.assertTrue(file['is_flash'])
+            self.assertFalse(file['is_video'] or file['is_audio'] or file['is_image'])
+            self.assertIsNone(file['preview_url'])
+            self.ok(self.guest.get(file['view_url']), 404)
+            self.ok(self.admin.get(file['view_url']))
+            self.moderate(root['post_id'])
+            response = self.guest.get(file['view_url'])
+            self.assertEqual(self.ok(response), data)
+            self.assertEqual(response[2]['Content-Type'], 'application/octet-stream')
+            self.assertTrue(response[2]['Content-Disposition'].startswith('attachment;'))
+            self.assertIn("default-src 'none'", response[2]['Content-Security-Policy'])
+            self.assertEqual(self.ok(self.guest.request('GET', file['view_url'], headers={'Range': 'bytes=0-7'}), 206), data[:8])
+            self.ok(self.guest.request('HEAD', file['view_url']))
+            self.ok(self.guest.get(f'/api/attachments/{file["id"]}/preview'), 404)
+            self.ok(self.mod.post(f'/api/attachments/{file["id"]}/moderate', {'action': 'hide', 'reason': 'hide SWF'}))
+            for client in [self.guest, self.admin]:
+                self.ok(client.get(file['view_url']), 404)
+                self.ok(client.get(file['download_url']), 404)
+            self.ok(self.mod.post(f'/api/attachments/{file["id"]}/moderate', {'action': 'show', 'reason': 'restore SWF'}))
+            self.ok(self.mod.post(f'/api/posts/{root["post_id"]}/restrict', {'action': 'hide', 'reason': 'hide parent'}))
+            self.ok(self.guest.get(file['view_url']), 404)
+            self.ok(self.mod.post(f'/api/attachments/{file["id"]}/moderate', {'action': 'hashban', 'reason': 'SWF exact ban'}))
+            self.ok(self.admin.get(file['view_url']), 404)
+            self.ok(self.admin.upload('/api/threads', fields, [('renamed.swf', data)]), 422)
+
+    def test_flash_rejects_fake_truncated_lzma_and_inflation_bombs(self):
+        fields = {'section_id': self.section, 'title': 'Bad Flash', 'body': 'test'}
+        movie = flash_fixture()
+        bad = [b'<script>alert(1)</script>', movie[:-1], movie + b'extra',
+               b'ZWS' + movie[3:], b'FWS' + b'\0' + movie[4:],
+               b'CWS\x08' + struct.pack('<I', 33 * 1024 * 1024) + zlib.compress(b'x' * 1024),
+               b'CWS\x08' + struct.pack('<I', 32) + zlib.compress(b'x' * 100000),
+               b'FWS\x08' + struct.pack('<I', len(movie)) + b'\xff' * (len(movie) - 8)]
+        for data in bad:
+            self.ok(self.normal.upload('/api/threads', fields, [('bad.swf', data)]), 422)
+        self.ok(self.normal.upload('/api/threads', fields, [('wrong.png', movie)]), 422)
+        self.ok(self.normal.upload('/api/threads', fields, [('wrong.txt', movie)]), 422)
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM attachments').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM posts').fetchone()[0], 0)
+        db.close()
+
+    def test_flash_player_static_isolation_and_local_runtime(self):
+        response = self.guest.get('/flash-player.html')
+        self.ok(response)
+        csp = response[2]['Content-Security-Policy']
+        for rule in ["sandbox allow-scripts", "frame-ancestors 'self'", "object-src 'none'", "form-action 'none'", "'wasm-unsafe-eval'"]:
+            self.assertIn(rule, csp)
+        self.assertNotIn('allow-same-origin', csp)
+        self.assertIsNone(response[2].get('Access-Control-Allow-Origin'))
+        self.assertNotIn('wasm-unsafe-eval', self.guest.get('/')[2]['Content-Security-Policy'])
+        for path in (ROOT / 'public/vendor/ruffle').glob('*'):
+            if path.suffix not in ['.wasm', '.js']: continue
+            response = self.guest.request('HEAD', '/vendor/ruffle/' + path.name)
+            self.ok(response)
+            self.assertEqual(response[2]['Access-Control-Allow-Origin'], '*')
+            if path.suffix == '.wasm': self.assertTrue(response[2]['Content-Type'].startswith('application/wasm'))
+        self.ok(self.guest.get('/vendor/ruffle/ruffle.js.map'), 404)
+        self.ok(self.guest.get('/vendor/ruffle/unknown.js'), 404)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_flash_sections(self):
+        root = self.ok(self.admin.upload('/api/threads', {'section_id': self.section, 'title': 'Ruffle local movie', 'body': 'Flash'},
+                       [('movie.swf', flash_fixture(actions=True)), ('spoiler.swf', flash_fixture(True))]), 201)
+        file = self.ok(self.guest.get(f'/api/posts/{root["post_id"]}'))['attachments'][0]
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            db.execute('UPDATE attachments SET spoiler=1 WHERE post_id=? AND id!=?', [root['post_id'], file['id']])
+        db.close()
+        second = self.ok(self.admin.post('/api/sections', {'slug': 'second-sidebar', 'title': 'Second sidebar section'}), 201)['id']
+        result = subprocess.run(['node', 'tests/test_flash_sections_browser.cjs'], cwd=ROOT,
+                                env={**os.environ, 'FORBIRDS_TEST_URL': self.base,
+                                     'FORBIRDS_FLASH_FIXTURE': json.dumps({'root': root, 'file': file, 'section': self.section, 'second': second})},
+                                text=True, capture_output=True, timeout=150)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_site_updater_disabled_by_default_and_admin_only(self):
+        self.assertFalse(self.ok(self.admin.get('/api/admin/update'))['enabled'])
+        for client, status in [(self.guest, 401), (self.normal, 403), (self.mod, 403)]:
+            self.ok(client.get('/api/admin/update'), status)
+            self.ok(client.post('/api/admin/update', {'password': PASSWORD, 'confirm': 'UPDATE'}), status)
+        self.ok(self.admin.request('POST', '/api/admin/update', data={'password': PASSWORD, 'confirm': 'UPDATE'}, headers={'X-CSRF-Token': 'wrong'}), 403)
+        self.ok(self.admin.post('/api/admin/update', {'password': PASSWORD, 'confirm': 'UPDATE'}), 503)
 
     def test_static_layouts_assets_and_private_path_allowlist(self):
         for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/presentation.js', '/markdown.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:

@@ -104,6 +104,7 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
       container.append(link(text, '/dashboard.html?mode=' + mode), ' · ');
     }
     if (admin()) {
+      container.append(link(t('Обновление сайта'), '/dashboard.html?mode=updates'), ' · ');
       container.append(link(t('Закрытый журнал фалзфлага'), '/dashboard.html?mode=falseflags'), ' · ');
       container.append(link(t('Автоблокировки Tor/I2P'), '/dashboard.html?mode=network-bans'), ' · ');
       container.append(link(t('Блокировки подключений'), '/dashboard.html?mode=identity-bans'), ' · ');

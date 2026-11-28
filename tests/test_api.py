@@ -127,7 +127,7 @@ class ApiTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix='forbirds-tests-')
         cls.storage = Path(cls.temp.name)
         Client.fixture_storage = cls.storage
-        cls.env = {**os.environ, 'FORBIRDS_STORAGE': str(cls.storage), 'FORBIRDS_SECURE_COOKIE': '0', 'FORBIRDS_POW_DIFFICULTY': '8'}
+        cls.env = {**os.environ, 'FORBIRDS_UPDATES_ENABLED': '1' if getattr(cls, 'updates_enabled', False) else '0', 'FORBIRDS_STORAGE': str(cls.storage), 'FORBIRDS_SECURE_COOKIE': '0', 'FORBIRDS_POW_DIFFICULTY': '8'}
         cls.php = shlex.split(os.environ.get('PHP_BIN', 'php'))
         for args, stdin in [(['install'], None), (['migrate'], None),
                             (['create-admin', 'admin'], PASSWORD + '\n')]:
@@ -1915,6 +1915,14 @@ class ApiTests(unittest.TestCase):
                                      'FORBIRDS_FLASH_FIXTURE': json.dumps({'root': root, 'file': file, 'section': self.section, 'second': second})},
                                 text=True, capture_output=True, timeout=150)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_site_updater_disabled_by_default_and_admin_only(self):
+        self.assertFalse(self.ok(self.admin.get('/api/admin/update'))['enabled'])
+        for client, status in [(self.guest, 401), (self.normal, 403), (self.mod, 403)]:
+            self.ok(client.get('/api/admin/update'), status)
+            self.ok(client.post('/api/admin/update', {'password': PASSWORD, 'confirm': 'UPDATE'}), status)
+        self.ok(self.admin.request('POST', '/api/admin/update', data={'password': PASSWORD, 'confirm': 'UPDATE'}, headers={'X-CSRF-Token': 'wrong'}), 403)
+        self.ok(self.admin.post('/api/admin/update', {'password': PASSWORD, 'confirm': 'UPDATE'}), 503)
 
     def test_static_layouts_assets_and_private_path_allowlist(self):
         for path in ['/', '/index.html', '/post.html?id=1', '/dashboard.html', '/profile.html', '/app.js', '/presentation.js', '/markdown.js', '/moderation.js', '/ujutnenko.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js', '/general.css', '/avatars/noavatar.png']:

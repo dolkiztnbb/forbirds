@@ -192,6 +192,10 @@ trait ModerationTools
 
     private function moderationGet(string $path): ?array
     {
+        if ($path === '/api/admin/update') {
+            $this->requireAdmin();
+            return (new SiteUpdater($this->config))->status();
+        }
         if ($path === '/api/admin/falseflags') {
             $this->requireAdmin();
             return $this->page('SELECT f.*,p.thread_id FROM falseflag_posts f JOIN posts p ON p.id=f.post_id ORDER BY f.post_id DESC', []);
@@ -229,6 +233,22 @@ trait ModerationTools
 
     private function moderationPost(string $path): ?array
     {
+        if ($path === '/api/admin/update') {
+            $actor = $this->requireAdmin();
+            $this->rateLimit('site-update', 5, 300);
+            if (array_diff(array_keys($this->input), ['password', 'confirm']) || ($this->input['confirm'] ?? null) !== 'UPDATE') $this->invalid('Подтвердите обновление сайта.');
+            $password = $this->password();
+            if (!password_verify($password, $actor['password_hash'])) throw new ApiError(403, 'password_failed', 'Неверный текущий пароль.');
+            try { $job = (new SiteUpdater($this->config))->enqueue((int) $actor['id']); }
+            catch (\RuntimeException $error) {
+                if ($error->getMessage() === 'updates_disabled') throw new ApiError(503, 'updates_disabled', 'Обновления выключены в настройках сервера.');
+                if ($error->getMessage() === 'update_busy') throw new ApiError(409, 'update_busy', 'Обновление уже ожидает выполнения или требует восстановления на сервере.');
+                throw $error;
+            }
+            $this->audit((int) $actor['id'], 'site.update.requested', 'site', 0, ['job_id' => $job['id']]);
+            http_response_code(202);
+            return $job;
+        }
         if ($path === '/api/moderation/privacy') {
             $actor = $this->requireAdmin();
             $enabled = $this->boolean('enabled');

@@ -11,7 +11,7 @@ final class StaticFiles
             return false;
         }
         $file = $path === '/' ? '/index.html' : $path;
-        $pages = ['/favicon.ico','/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/markdown.js', '/presentation.js', '/section-state.js', '/flash-player.html', '/flash-player.js', '/flash-player.css', '/ujutnenko.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
+        $pages = ['/favicon.ico','/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/updates.js', '/markdown.js', '/presentation.js', '/section-state.js', '/flash-player.html', '/flash-player.js', '/flash-player.css', '/ujutnenko.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
         $ruffle = in_array($file, ['/vendor/ruffle/ruffle.js', '/vendor/ruffle/ruffle_web-wasm_mvp_bg.UMWKJ7EM.wasm', '/vendor/ruffle/ruffle_web_bg.QDRSAAAZ.wasm'], true);
         if (!$ruffle && !in_array($file, $pages, true)
             && !preg_match('~\A/flags/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)

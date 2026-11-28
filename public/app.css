@@ -282,3 +282,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .flash-player { max-width: 100%; }
 .attachment-flash { display: block; width: 640px; max-width: 100%; height: 480px; border: 1px solid #999; background: #222; }
 @media (max-width: 600px) { .attachment-flash { height: 320px; } }
+
+.site-update-panel { max-width: 760px; overflow-wrap: anywhere; }
+#site-update-form label, #site-update-form input { display: block; margin: 5px 0; }
+#site-update-form input { box-sizing: border-box; max-width: 100%; }
+#site-update-feedback, #site-update-warning { color: #8b270b; }

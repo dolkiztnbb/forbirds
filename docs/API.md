@@ -744,3 +744,40 @@ supported. See README for runtime update/deployment instructions and licenses.
 
 Sidebar disclosure preferences are frontend-only per-section browser storage;
 there is no new preference endpoint or change to section API visibility/counts.
+
+## Operator-enabled site updates
+
+- `GET /api/admin/update`: administrator only; returns `enabled`, `maintenance`
+  and the latest job (`id`, `status`, `phase`, timestamps, optional `before`/`after`
+  commit IDs and a fixed error code). Initial status: `idle`. No raw command
+  output, filesystem paths, remotes, actor details or credentials are returned.
+- `POST /api/admin/update`: administrator only, ordinary CSRF/network/account
+  restrictions, current `password` (12–72 bytes), exact `confirm:"UPDATE"`.
+  Extra keys (including branch/remote/command/path) are rejected. At most five
+  attempts per five minutes through the normal persistent rate limiter.
+  Success: **202**, `status:"queued"`, random job ID. It does not claim the site
+  was updated. A single queued/running job or unrecovered maintenance: **409**.
+  Bad password: **403**. Disabled by default: **503** (`updates_disabled`).
+
+The HTTP handler only saves a private job and audit event (`site.update.requested`);
+it never spawns a process. With `FORBIRDS_UPDATES_ENABLED=1`, an operator-scheduled
+native PHP `bin/update.php` worker uses fixed argv commands without a shell:
+preflight clean `main`, SQLite VACUUM INTO snapshot, fast-forward-only pull from
+`origin main`, then a fresh `PHP_BINARY bin/console.php migrate` process with the
+same storage. Migration is never attempted after pull failure. No arbitrary
+request-supplied options or automatic merge/stash/reset are supported.
+
+Job states: `idle`, `queued`, `running`, `succeeded`, `failed`. Phases: `queued`,
+`preflight`, `maintenance`, `backup`, `pull`, `migrate`, `complete`. Busy worker and
+ordinary API requests coordinate through flock; after the maintenance marker is
+set, new ordinary GET/POST/HEAD requests fail **503**, including attachments.
+The worker drains existing requests before backup/pull. Static assets and GET
+`/api/session`/`/api/admin/update` remain available for the administrator status
+page, subject to brief SQLite locks. Public-view reads still downgrade identity,
+so they cannot access admin status. Presentation mode hides this page entirely.
+
+Pull/migration timeout or failure leaves maintenance enabled for operator repair;
+no unsafe automatic rollback is attempted. Crashes require manual examination.
+Private snapshot/log/state files are below `storage/site-update/`, outside public;
+no new database migration is needed for this feature. Deployment permissions,
+cron/Docker setup, OPcache requirements and recovery: **UPDATES.md**.

@@ -2,6 +2,15 @@ import { t, locale } from '/i18n.js';
 
 export function moderationUI({ node, button, link, api, post, notify, refresh, staff, admin }) {
   let showIdentity = false;
+  const panel = (title, classes) => {
+    const tools = node('fieldset', null, 'mod-tools ' + classes);
+    tools.append(node('legend', t(title))); return tools;
+  };
+  const actionButton = (action, label, callback) => {
+    const control = button(label, callback);
+    if (['delete', 'hashban', 'block', 'avatar_delete', 'avatar_hashban', 'description_delete', 'description_hashban'].includes(action)) control.classList.add('mod-danger');
+    return control;
+  };
   const reason = () => prompt(t('Причина действия (обязательно):'))?.trim();
   async function fillIdentity(element) {
     element.replaceChildren();
@@ -36,14 +45,14 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     document.querySelectorAll('[data-identity-post]').forEach(fillIdentity);
   }
   function fileTools(file) {
-    const tools = node('div', null, 'mod-tools file-tools');
+    const tools = panel('Модерация файла', 'file-tools');
     if (!staff() || file.moderation_state === 'deleted') return tools;
     const actions = [
       [file.spoiler ? 'unspoiler' : 'spoiler', file.spoiler ? t('Убрать спойлер') : t('Наложить спойлер')],
       [file.moderation_state === 'hidden' ? 'show' : 'hide', file.moderation_state === 'hidden' ? t('Показать файл') : t('Скрыть файл')],
       ['delete', t('Удалить файл навсегда')], ['hashban', t('Запретить файл и похожие изображения')],
     ];
-    for (const [action, label] of actions) tools.append(button(label, async () => {
+    for (const [action, label] of actions) tools.append(actionButton(action, label, async () => {
       const why = reason(); if (!why) return;
       if (!confirm(label + ': ' + file.original_name + '?')) return;
       await post(`/attachments/${file.id}/moderate`, { action, reason: why });
@@ -61,7 +70,7 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     });
   }
   function profileTools(user, canManage, after = refresh) {
-    const tools = node('div', null, 'profile-moderation mod-tools');
+    const tools = panel('Модерация профиля', 'profile-moderation');
     if (!canManage) return tools;
     const actions = [
       ['avatar_delete', t('Удалить аватарку пользователя')],
@@ -72,7 +81,7 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
       [user.description_locked ? 'description_unlock' : 'description_lock', user.description_locked ? t('Разрешить редактирование описания') : t('Запретить редактирование описания')],
     ];
     for (const [action, label] of actions) {
-      const control = button(label, async () => {
+      const control = actionButton(action, label, async () => {
         const why = reason(); if (!why) return;
         if (!confirm(label + ': ' + user.username + '?')) return;
         await post(`/users/${user.id}/profile/moderate`, { action, reason: why });
@@ -85,12 +94,12 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     return tools;
   }
   function postControls(item) {
-    const tools = node('div', null, 'post-restrictions mod-tools');
+    const tools = panel('Ограничения доступа', 'post-restrictions');
     if (!staff()) return tools;
     for (const [action, label] of [
       [item.is_hidden ? 'unhide' : 'hide', item.is_hidden ? t('Вернуть видимость поста') : t('Скрыть пост от посетителей')],
       [item.is_blocked ? 'unblock' : 'block', item.is_blocked ? t('Разблокировать пост') : t('Заблокировать пост')],
-    ]) tools.append(button(label, async () => {
+    ]) tools.append(actionButton(action, label, async () => {
       const why = reason(); if (!why) return;
       if (!confirm(label + ' #' + item.id + '?')) return;
       await post(`/posts/${item.id}/restrict`, { action, reason: why });

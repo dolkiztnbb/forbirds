@@ -18,6 +18,10 @@ header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
 header('Referrer-Policy: no-referrer');
 
 try {
+    if ($_SERVER['REQUEST_METHOD'] === 'GET' && parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) === '/api/banner') {
+        echo json_encode(['data' => (new \ForBirds\BannerRotation($config['storage']))->current(time())], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        exit;
+    }
     $requestPath = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
     $controlRead = $_SERVER['REQUEST_METHOD'] === 'GET' && in_array($requestPath, ['/api/session', '/api/admin/update'], true);
     if (!$controlRead) {
@@ -38,8 +42,24 @@ try {
     session_start();
     $_SESSION['csrf'] ??= bin2hex(random_bytes(32));
     $api = new Api(Database::connect($config['database']), $config);
+    // Streams are bounded and watch the maintenance marker; do not hold the updater gate open.
+    if ($_SERVER['REQUEST_METHOD'] === 'GET' && preg_match('~^/api/threads/[1-9][0-9]*/events$~D', $requestPath) && isset($updateRequestLock)) {
+        fclose($updateRequestLock);
+    }
     $data = $api->dispatch($_SERVER['REQUEST_METHOD'], parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
-    echo json_encode(['data' => \ForBirds\AbuseIdentity::redact($data)], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    $json = json_encode(['data' => \ForBirds\AbuseIdentity::redact($data)], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    if (http_response_code() === 200 && \ForBirds\PostCache::eligible($_SERVER['REQUEST_METHOD'], $requestPath)) {
+        // Dispatch above has already enforced current visibility, bans and presentation mode.
+        $tag = \ForBirds\PostCache::tag($json, $_SESSION['csrf'], \ForBirds\Language::current(), ($_SERVER['HTTP_X_FORBIRDS_PUBLIC_VIEW'] ?? '') === '1');
+        header('Cache-Control: private, no-cache, max-age=0, must-revalidate');
+        header('Vary: Cookie, Accept-Language, X-ForBirds-Public-View, X-ForBirds-Fingerprint');
+        header('ETag: ' . $tag);
+        if (\ForBirds\PostCache::matches($_SERVER['HTTP_IF_NONE_MATCH'] ?? '', $tag)) {
+            http_response_code(304);
+            exit;
+        }
+    }
+    echo $json;
 } catch (ApiError $e) {
     http_response_code($e->status);
     if ($e->status === 405) {

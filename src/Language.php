@@ -7,6 +7,7 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Некорректный режим live.' => 'Invalid live mode.',
         'Сайт обновляется. Повторите запрос позже.' => 'The site is being updated. Try again later.',
         'Подтвердите обновление сайта.' => 'Confirm the site update.',
         'Неверный текущий пароль.' => 'Incorrect current password.',

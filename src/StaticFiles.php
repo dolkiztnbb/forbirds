@@ -11,9 +11,16 @@ final class StaticFiles
             return false;
         }
         $file = $path === '/' ? '/index.html' : $path;
-        $pages = ['/favicon.ico','/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/updates.js', '/markdown.js', '/presentation.js', '/section-state.js', '/flash-player.html', '/flash-player.js', '/flash-player.css', '/ujutnenko.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
+        $pages = ['/favicon.ico','/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/banners.js', '/live-thread.js', '/post-cache.js', '/updates.js', '/markdown.js', '/presentation.js', '/section-state.js', '/flash-player.html', '/flash-player.js', '/flash-player.css', '/ujutnenko.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
+        $banner = null;
+        if (str_starts_with($file, '/static/banners/')) {
+            $catalog = (new BannerRotation(''))->all();
+            $banner = $catalog[rawurldecode(substr($file, strlen('/static/banners/')))] ?? null;
+            if (!$banner) return false;
+            $file = '/static/banners/' . rawurldecode(substr($file, strlen('/static/banners/')));
+        }
         $ruffle = in_array($file, ['/vendor/ruffle/ruffle.js', '/vendor/ruffle/ruffle_web-wasm_mvp_bg.UMWKJ7EM.wasm', '/vendor/ruffle/ruffle_web_bg.QDRSAAAZ.wasm'], true);
-        if (!$ruffle && !in_array($file, $pages, true)
+        if (!$banner && !$ruffle && !in_array($file, $pages, true)
             && !preg_match('~\A/flags/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)
             && !preg_match('~\A/static/reactions/[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}\.(?i:png|gif|jpe?g|webp)\z~', $file)
             && !preg_match('~\A/(?:avatars|icons|static)/[a-zA-Z0-9/_-]+\.(?:png|jpg|jpeg|gif|webp|ico)\z~', $file)) {
@@ -33,7 +40,7 @@ final class StaticFiles
         $types = ['html' => 'text/html', 'css' => 'text/css', 'js' => 'text/javascript',
             'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif',
             'webp' => 'image/webp', 'ico' => 'image/x-icon', 'wasm' => 'application/wasm'];
-        header('Content-Type: ' . $types[strtolower(pathinfo($resolved, PATHINFO_EXTENSION))] . '; charset=utf-8');
+        header('Content-Type: ' . ($banner['mime'] ?? $types[strtolower(pathinfo($resolved, PATHINFO_EXTENSION))]) . '; charset=utf-8');
         header('X-Content-Type-Options: nosniff');
         header('Cache-Control: no-cache');
         header('Referrer-Policy: same-origin');

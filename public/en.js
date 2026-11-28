@@ -1,5 +1,18 @@
 // English system messages. Russian source strings are stable translation keys.
 export default {
+  "ForBirds — форум": "ForBirds — forum",
+  "Профиль — ForBirds": "Profile — ForBirds",
+  "Ограничения доступа": "Access restrictions",
+  "Модерация профиля": "Profile moderation",
+  "Модерация файла": "File moderation",
+  "Публикация": "Publication",
+  "Последние ответы": "Latest replies",
+  "Тема больше недоступна.": "This thread is no longer available.",
+  "Восстановление live-соединения…": "Reconnecting live…",
+  "Ответы в реальном времени": "Live replies",
+  "Подключение live…": "Connecting live…",
+  "Live-соединение недоступно.": "Live connection unavailable.",
+  "Подключить live": "Connect live",
   "Не удалось связаться с сервером. Проверьте соединение и повторите запрос.": "Could not reach the server. Check your connection and try again.",
   "Заполните это поле.": "Please fill out this field.",
   "Минимум символов: {count}.": "Minimum characters: {count}.",

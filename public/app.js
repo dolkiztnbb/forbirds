@@ -2,14 +2,21 @@ import { t, locale, initLanguage } from '/i18n.js';
 import { browserSignal } from '/ujutnenko.js';
 import { moderationUI } from '/moderation.js';
 import { renderMarkdown } from '/markdown.js';
+import { createPostCache } from '/post-cache.js';
+import { startBanners } from '/banners.js';
+import { startThreadLive } from '/live-thread.js';
 import { siteUpdateUI } from '/updates.js';
 import { sectionOpen, rememberSection } from '/section-state.js';
+startBanners(document.querySelector('.banner-placeholder'));
 await initLanguage();
 
 const $ = selector => document.querySelector(selector);
 const params = new URLSearchParams(location.search);
+const postCache = createPostCache();
+window.addEventListener('pagehide', () => postCache.clear());
 const labels = { approved: t("Опубликовано"), pending: t("Ожидает проверки"), rejected: t("Отклонено"), deleted: t("Удалено") };
 const roleLabels = { user: t("Участник"), moderator: t("Модератор"), admin: t("Администратор") };
+let viewerGeneration = 0;
 let me = null, csrf = '', sections = [], composer = null, readOnly = false, reactionEmojis = [];
 const presentation = () => !!window.ForBirdsPresentation?.enabled;
 const staff = () => !presentation() && me && !me.is_banned && ['moderator', 'admin'].includes(me.role);
@@ -44,6 +51,7 @@ function notify(value, isError = true) {
   notice.textContent = value instanceof Error ? value.message : String(value);
 }
 async function api(path, { method = 'GET', body } = {}) {
+  if (method !== 'GET') postCache.clear();
   if (method !== 'GET' && presentation()) throw new Error(t('В режиме показа действия отключены.'));
   const headers = { 'Accept-Language': document.documentElement.lang };
   if (presentation()) headers['X-ForBirds-Public-View'] = '1';
@@ -53,8 +61,10 @@ async function api(path, { method = 'GET', body } = {}) {
     headers['Content-Type'] = 'application/json'; body = JSON.stringify(body);
   }
   let response;
-  try { response = await fetch('/api' + path, { method, body, headers, credentials: 'same-origin', cache: 'no-store' }); }
+  try { response = await postCache.request(path, { method, body, headers, credentials: 'same-origin', cache: 'no-store' },
+    [csrf, me?.id, me?.role, !!me?.is_banned, presentation(), document.documentElement.lang]); }
   catch { throw new Error(t('Не удалось связаться с сервером. Проверьте соединение и повторите запрос.')); }
+  finally { if (method !== 'GET') postCache.clear(); }
   let payload;
   try { payload = await response.json(); } catch { throw new Error(t("Сервер вернул некорректный ответ. Повторите запрос позже.")); }
   if (!response.ok) {
@@ -207,7 +217,10 @@ function identityUI() {
   if ($('#queue-tab')) $('#queue-tab').hidden = !staff();
 }
 async function loadSections() {
-  sections = await api('/sections');
+  const generation = viewerGeneration;
+  const data = await api('/sections');
+  if (generation !== viewerGeneration) return;
+  sections = data;
   const side = $('#sections'); side.replaceChildren();
   if (!sections.length) side.append(node('p', t("Разделов пока нет. Администратор может создать первый в панели публикаций.")));
   for (const section of sections) {
@@ -247,7 +260,9 @@ async function loadSections() {
   }
 }
 async function loadNews() {
+  const generation = viewerGeneration;
   const news = await api('/threads?news=1&limit=5');
+  if (generation !== viewerGeneration) return;
   const table = $('#news'); table.replaceChildren();
   for (const item of news.items) {
     const row = node('tr'), when = node('td', new Date(item.created_at).toLocaleDateString(locale()), 'news-date');
@@ -491,7 +506,8 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
     links.append(link(count + ' →', '/post.html?id=' + item.thread_id)); content.append(links);
   }
   if (staff() && item.status !== 'deleted') {
-    const tools = node('div', null, 'mod-tools');
+    const tools = node('fieldset', null, 'mod-tools publication-tools');
+    tools.append(node('legend', t('Публикация')));
     for (const [action, text] of [['approve', t("Подтвердить")], ['unapprove', t("Снять подтверждение")], ['reject', t("Отклонить")], ['delete', t("Удалить")]]) {
       const b = button(text, async () => {
         if (action === 'delete' && !confirm(t("Удалить сообщение №") + item.id + '?')) return;
@@ -502,6 +518,7 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
           await loadView(); await loadNews(); await loadSections();
         } finally { if (b.isConnected) b.disabled = readOnly; }
       });
+      b.className = action === 'delete' || action === 'reject' ? 'mod-danger' : action === 'approve' ? 'mod-primary' : '';
       b.disabled = (action === 'approve' && (item.status === 'approved' || item.is_blocked)) || (action === 'unapprove' && item.status === 'pending');
       tools.append(b);
     }
@@ -533,16 +550,49 @@ async function loadFeed() {
   if (!posts.filter(Boolean).length) empty(container, t("Тем пока нет. Создайте первую тему или выберите другой раздел."));
   paginate(data);
 }
-async function loadThread() {
+let threadLive = null, threadVersion = '', threadScope = '', threadGeneration = 0;
+function reconcilePosts(container, items, options = {}) {
+  const keep = new Set();
+  items.forEach((item, index) => {
+    const key = 'post-' + item.id;
+    const signature = JSON.stringify([item, options, !!staff(), !!admin()]);
+    let element = document.getElementById(key);
+    if (!element || element.dataset.signature !== signature) {
+      const replacement = renderPost(item, options); replacement.dataset.signature = signature;
+      if (element?.parentNode === container) element.replaceWith(replacement);
+      element = replacement;
+    }
+    keep.add(element);
+    if (container.children[index] !== element) container.insertBefore(element, container.children[index] || null);
+  });
+  for (const child of [...container.children]) if (!keep.has(child)) child.remove();
+}
+async function loadThread({ live = false } = {}) {
   const id = params.get('id');
   if (!/^[1-9][0-9]*$/.test(id || '')) throw new Error(t("Не указан номер темы. Выберите тему в ленте."));
-  const data = await api('/threads/' + id + '?' + pageQuery());
+  if (!live) { threadLive?.stop(); threadLive = null; $('.thread-live')?.remove(); }
+  const generation = ++threadGeneration;
+  const query = pageQuery(); query.set('live', '1');
+  const data = await api('/threads/' + id + '?' + query);
+  if (generation !== threadGeneration) return;
+  threadVersion = data.live_version; threadScope = data.live_scope;
   $('#page-title').textContent = data.title; document.title = data.title + ' — BirdArmageddon';
   $('#back-to-section').href = '/index.html?section_id=' + data.section_id;
-  const container = $('#thread'); container.replaceChildren(renderPost(data.post, { title: data.title, threadLink: false }));
-  container.append(node('hr'));
-  for (const reply of data.replies.items) container.append(renderPost(reply));
-  if (!data.replies.items.length) container.append(node('p', t("Ответов пока нет.")));
+  const container = $('#thread');
+  if (!live || !container.querySelector('.thread-root')) {
+    const root = node('div', null, 'thread-root'), replies = node('div', null, 'thread-replies');
+    const tail = node('section', null, 'thread-tail');
+    tail.append(node('h3', t('Последние ответы')), node('div', null, 'thread-tail-posts'));
+    container.replaceChildren(root, node('hr'), replies, node('p', t('Ответов пока нет.'), 'thread-empty'), tail);
+  }
+  // Keep unchanged DOM nodes, media playback, draft and scroll position intact.
+  reconcilePosts(container.querySelector('.thread-root'), [data.post], { title: data.title, threadLink: false });
+  reconcilePosts(container.querySelector('.thread-replies'), data.replies.items);
+  const lastPageId = Math.max(0, ...data.replies.items.map(item => item.id));
+  const tail = data.live_tail.filter(item => item.id > lastPageId);
+  reconcilePosts(container.querySelector('.thread-tail-posts'), tail);
+  container.querySelector('.thread-tail').hidden = !tail.length;
+  container.querySelector('.thread-empty').hidden = !!(data.replies.items.length || tail.length);
   paginate(data.replies);
   const settings = $('#thread-settings'); settings.replaceChildren();
   if (staff()) {
@@ -556,11 +606,35 @@ async function loadThread() {
     }
   }
   const section = sections.find(s => s.id === data.section_id);
-  const blocked = presentation() || readOnly || !!me?.is_banned || (!staff() && (!!data.is_locked || !!section?.is_archived));
+  const blocked = presentation() || readOnly || !!me?.is_banned || (!staff() && (!!data.is_locked || !!data.section_archived || !!section?.is_archived));
   $('#composer').hidden = blocked;
-  if (blocked && !presentation()) container.append(node('p', readOnly ? t('Для этого подключения, браузера или аккаунта доступно только чтение.') : me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации.")));
+  container.querySelector('.thread-readonly')?.remove();
+  if (blocked && !presentation()) container.append(node('p', readOnly ? t('Для этого подключения, браузера или аккаунта доступно только чтение.') : me?.is_banned ? t("Аккаунт заблокирован.") : t("Тема или раздел закрыты для публикации."), 'thread-readonly'));
   if (!blocked && !composer) composer = new Composer(id);
+  if (!live) threadLive = startThreadLive({
+    id, page: query.get('page'), publicView: presentation(), target: container,
+    version: () => threadVersion, scope: () => threadScope, refresh: () => loadThread({ live: true }),
+    reset: async () => {
+      postCache.clear();
+      ++threadGeneration; ++viewerGeneration;
+      container.replaceChildren(); $('#thread-settings').replaceChildren(); $('#composer').hidden = true;
+      $('#sections').replaceChildren(); $('#news').replaceChildren(); $('#notice').hidden = true;
+      moderation.setIdentity(false);
+      for (const dialog of document.querySelectorAll('dialog[open]:not(#language-dialog)')) dialog.close();
+      composer?.cancel();
+      const session = await api('/session'); me = session.user; csrf = session.csrf_token; readOnly = !!session.read_only;
+      moderation.setIdentity(!presentation() && session.privacy_enabled); identityUI();
+      if (composer) {
+        $('#falseflag-controls').hidden = !admin(); composer.resetAttribution();
+        composer.interval = me ? 30 : 45;
+        await composer.refreshStatus();
+      }
+      await Promise.all([loadSections(), loadNews()]); applyReadOnly();
+    },
+    gone: () => { ++threadGeneration; container.replaceChildren(node('p', t('Тема больше недоступна.'))); $('#thread-settings').replaceChildren(); $('#composer').hidden = true; },
+  });
 }
+
 async function loadDashboard() {
   const mode = params.get('mode') || 'new';
   const container = $('#dashboard-content'); container.replaceChildren();

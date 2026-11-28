@@ -105,10 +105,15 @@ const path = require('node:path');
     await guest.goto(base + '/dashboard.html');
     await guest.waitForFunction(() => document.querySelector('#section-select')?.options.length > 0);
     await guest.locator('#composer').waitFor();
+    await guest.locator('.site-banner').waitFor({ state: 'visible' });
+    await guest.waitForFunction(() => { const image = document.querySelector('.site-banner'); return image?.complete && image.naturalWidth > 0; });
     const originalLayout = await guest.evaluate(() => ({
       headerHeight: getComputedStyle(document.querySelector('.sub')).height,
       bannerWidth: document.querySelector('.banner-placeholder').getBoundingClientRect().width,
       bannerHeight: document.querySelector('.banner-placeholder').getBoundingClientRect().height,
+      imageWidth: document.querySelector('.site-banner').getBoundingClientRect().width,
+      imageHeight: document.querySelector('.site-banner').getBoundingClientRect().height,
+      viewportWidth: innerWidth,
       scrollOverflow: getComputedStyle(document.querySelector('.main-content > .scroll')).overflowY,
       textareaHeight: document.querySelector('.post-tb').getBoundingClientRect().height,
       viewportHeight: innerHeight,
@@ -116,8 +121,11 @@ const path = require('node:path');
       navigationInHeader: !!document.querySelector('.sub .site-nav'),
     }));
     assert.ok(parseFloat(originalLayout.headerHeight) >= 30);
-    assert.equal(originalLayout.bannerWidth, 600);
-    assert.equal(originalLayout.bannerHeight, 200);
+    // The operator's banner layout is not a fixed 600x200 slot. Validate the loaded image instead.
+    assert.ok(originalLayout.bannerWidth > 0 && originalLayout.bannerWidth <= originalLayout.viewportWidth);
+    assert.ok(originalLayout.bannerHeight > 0);
+    assert.ok(Math.abs(originalLayout.bannerWidth - originalLayout.imageWidth) <= 1);
+    assert.ok(Math.abs(originalLayout.bannerHeight - originalLayout.imageHeight) <= 1);
     assert.equal(originalLayout.scrollOverflow, 'auto');
     assert.ok(Math.abs(originalLayout.textareaHeight - originalLayout.viewportHeight / 2) <= 2);
     assert.equal(originalLayout.composerIsTable, true);

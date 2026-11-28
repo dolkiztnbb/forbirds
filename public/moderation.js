@@ -1,4 +1,5 @@
 import { t, locale } from '/i18n.js';
+import { openMoveDialog } from '/move-dialog.js';
 
 export function moderationUI({ node, button, link, api, post, notify, refresh, staff, admin }) {
   let showIdentity = false;
@@ -61,13 +62,7 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     return tools;
   }
   function moveButton(item) {
-    return button(t('Переместить'), async () => {
-      const target = prompt(item.is_root ? t('ID раздела назначения:') : t('ID темы назначения:'));
-      if (!target) return;
-      const why = reason(); if (!why) return;
-      await post(`/posts/${item.id}/move`, { [item.is_root ? 'section_id' : 'thread_id']: target, reason: why });
-      notify(t('Сообщение перемещено.'), false); await refresh();
-    });
+    return button(t('Переместить'), async () => openMoveDialog(item, { node, button, api, post, notify, refresh }));
   }
   function profileTools(user, canManage, after = refresh) {
     const tools = panel('Модерация профиля', 'profile-moderation');
@@ -108,27 +103,42 @@ export function moderationUI({ node, button, link, api, post, notify, refresh, s
     return tools;
   }
   function navigation(container) {
+    container.querySelector('.moderation-console')?.remove();
     if (!staff()) return;
-    for (const [mode, text] of [['archive', t('Удалённые и отклонённые')], ['restricted', t('Скрытые и заблокированные посты')], ['media-bans', t('Запреты файлов')], ['description-bans', t('Запреты описаний')]]) {
-      container.append(link(text, '/dashboard.html?mode=' + mode), ' · ');
-    }
+    const console = node('section', null, 'moderation-console');
+    console.setAttribute('aria-label', t('Панель модерации'));
+    console.append(node('h2', t('Панель модерации')));
+    const groups = node('div', null, 'moderation-groups');
+    const active = new URLSearchParams(location.search).get('mode') || 'new';
+    const group = (title, items) => {
+      const box = node('section', null, 'moderation-group'); box.append(node('h3', t(title)));
+      const links = node('div', null, 'moderation-links');
+      for (const [mode, text] of items) {
+        const control = link(t(text), '/dashboard.html?mode=' + mode);
+        if (mode === 'queue') control.id = 'queue-tab';
+        if (mode === active) control.setAttribute('aria-current', 'page');
+        links.append(control);
+      }
+      box.append(links); groups.append(box);
+    };
+    group('Сообщения', [['queue', 'Очередь модерации'], ['archive', 'Удалённые и отклонённые'], ['restricted', 'Скрытые и заблокированные посты']]);
+    group('Ограничения', [['media-bans', 'Запреты файлов'], ['description-bans', 'Запреты описаний'], ...(admin() ? [['network-bans', 'Автоблокировки Tor/I2P'], ['identity-bans', 'Блокировки подключений']] : [])]);
+    group('Контроль', [['audit', 'Журнал модерации'], ...(admin() ? [['falseflags', 'Закрытый журнал фалзфлага'], ['updates', 'Обновление сайта']] : [])]);
+    console.append(groups);
     if (admin()) {
-      container.append(link(t('Обновление сайта'), '/dashboard.html?mode=updates'), ' · ');
-      container.append(link(t('Закрытый журнал фалзфлага'), '/dashboard.html?mode=falseflags'), ' · ');
-      container.append(link(t('Автоблокировки Tor/I2P'), '/dashboard.html?mode=network-bans'), ' · ');
-      container.append(link(t('Блокировки подключений'), '/dashboard.html?mode=identity-bans'), ' · ');
+      const privacy = node('div', null, 'moderation-privacy');
       const label = node('label', t('Показывать IP и идентификаторы (только администратор)'));
       const input = node('input'); input.type = 'checkbox'; input.id = 'show-identity'; input.checked = showIdentity;
       input.addEventListener('change', async () => {
         input.disabled = true;
         try {
-          await post('/moderation/privacy', { enabled: input.checked });
-          setIdentity(input.checked);
+          await post('/moderation/privacy', { enabled: input.checked }); setIdentity(input.checked);
         } catch (error) { input.checked = showIdentity; notify(error); }
         finally { input.disabled = false; }
       });
-      label.prepend(input); container.append(label);
+      label.prepend(input); privacy.append(label); console.append(privacy);
     }
+    container.append(console);
   }
   async function bans(container, mode) {
     if (!staff()) throw new Error(t('Для этой страницы нужны права модератора.'));

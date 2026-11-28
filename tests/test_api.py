@@ -285,6 +285,58 @@ class ApiTests(unittest.TestCase):
                  'FORBIRDS_LIVE_FIXTURE': json.dumps(topic)}, text=True, capture_output=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_post_reference_location_visibility_pages_and_moves(self):
+        a = self.topic()
+        b = self.topic(title='Reference destination')
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            # Hidden/pending posts must not inflate a visitor's page number.
+            for index in range(24):
+                db.execute("INSERT INTO posts(thread_id,body,status) VALUES (?,?,'approved')", (a['thread_id'], f'Reference {index}'))
+            target = db.execute('SELECT max(id) FROM posts').fetchone()[0]
+            db.execute("UPDATE posts SET status='pending' WHERE id IN (SELECT id FROM posts WHERE thread_id=? AND is_root=0 AND id<? ORDER BY id LIMIT 5)", (a['thread_id'], target))
+            own = db.execute("SELECT min(id) FROM posts WHERE thread_id=? AND status='pending'", [a['thread_id']]).fetchone()[0]
+            db.execute('UPDATE posts SET user_id=? WHERE id=?', (self.ids['normal'], own))
+        db.close()
+        self.ok(self.guest.get(f'/api/posts/{own}/location'), 404)
+        self.ok(self.normal.get(f'/api/posts/{own}/location'))
+        path = f'/api/posts/{target}/location'
+        location = self.ok(self.guest.get(path))
+        self.assertEqual(location['page'], 1)
+        self.assertEqual(location['url'], f'/post.html?id={a["thread_id"]}&page=1#post-{target}')
+        self.assertEqual(self.ok(self.mod.get(path))['page'], 2)
+        self.assertEqual(self.ok(self.mod.request('GET', path, headers={'X-ForBirds-Public-View': '1'}))['page'], 1)
+        self.ok(self.mod.post(f'/api/posts/{target}/move', {'thread_id': b['thread_id'], 'reason': 'Reference follows moved post'}))
+        self.assertEqual(self.ok(self.guest.get(path))['thread_id'], b['thread_id'])
+        self.ok(self.mod.post(f'/api/posts/{target}/restrict', {'action': 'hide', 'reason': 'No reference leak'}))
+        self.ok(self.guest.get(path), 404)
+        self.ok(self.normal.get(path), 404)
+        self.ok(self.mod.get(path))
+        self.ok(self.mod.request('GET', path, headers={'X-ForBirds-Public-View': '1'}), 404)
+        self.moderate(target, 'delete')
+        self.ok(self.guest.get(path), 404)
+        self.assertEqual(self.ok(self.guest.get(f'/api/posts/{b["post_id"]}/location'))['page'], 1)
+        self.moderate(b['post_id'], 'unapprove')
+        self.ok(self.guest.get(f'/api/posts/{b["post_id"]}/location'), 404)
+        self.ok(self.guest.get('/api/posts/999999999/location'), 404)
+
+    @unittest.skipUnless(os.environ.get('FORBIRDS_BROWSER') == '1', 'optional browser test; see README')
+    def test_browser_navigation_moves_references(self):
+        a = self.topic()
+        b = self.topic(title='Destination thread')
+        reply = self.ok(self.mod.post(f'/api/threads/{a["thread_id"]}/replies', {'body': 'Move this reference reply'}), 201)
+        section = self.ok(self.admin.post('/api/sections', {'slug': 'destination', 'title': 'Destination section'}), 201)['id']
+        with sqlite3.connect(self.storage / 'forum.sqlite') as db:
+            for index in range(21):
+                db.execute("INSERT INTO posts(thread_id,body,status) VALUES (?,?,'approved')", (b['thread_id'], f'Page reply {index}'))
+            target = db.execute('SELECT max(id) FROM posts').fetchone()[0]
+            db.execute('UPDATE posts SET body=? WHERE id=?', (f'Reference >>{target}', a['post_id']))
+        db.close()
+        result = subprocess.run(['node', 'tests/test_navigation_moves_references_browser.cjs'], cwd=ROOT,
+            env={**os.environ, 'FORBIRDS_TEST_URL': self.base, 'FORBIRDS_TEST_PASSWORD': PASSWORD,
+                 'FORBIRDS_UI_FIXTURE': json.dumps({'a': a, 'b': b, 'reply': reply, 'section': section, 'target': target})},
+            text=True, capture_output=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_post_cache_etags_revalidate_visibility_and_viewers(self):
         topic = self.topic()
         path = f'/api/posts/{topic["post_id"]}'

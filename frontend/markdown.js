@@ -13,6 +13,21 @@ md.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
   tokens[index].attrSet('rel', 'nofollow noopener noreferrer');
   return renderer.renderToken(tokens, index, options);
 };
+// Post references are numeric local links, not arbitrary HTML/URLs. Never nest links.
+md.inline.ruler.before('text', 'post_reference', (state, silent) => {
+  if (state.linkLevel > 0 || state.src[state.pos] !== '>' || state.src[state.pos - 1] === '>') return false;
+  const match = /^>>([1-9][0-9]{0,8})(?![0-9A-Za-z_])/.exec(state.src.slice(state.pos, state.pos + 13));
+  if (!match) return false;
+  if (!silent) {
+    const token = state.push('post_reference', 'a', 0); token.content = match[1];
+  }
+  state.pos += match[0].length; return true;
+});
+md.renderer.rules.post_reference = (tokens, index) => {
+  const id = tokens[index].content;
+  return `<a class="post-reference" href="/post.html?post=${id}#post-${id}">&gt;&gt;${id}</a>`;
+};
+
 // Resolve only exact, catalog-backed shortcode tokens. Code spans/fences, escapes,
 // link destinations and raw HTML are never passed through string replacement.
 md.inline.ruler.before('text', 'reaction_emoji', (state, silent) => {

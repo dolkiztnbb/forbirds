@@ -1,0 +1,80 @@
+const assert = require('node:assert/strict');
+const { chromium } = require('playwright-core');
+(async () => {
+  let options = { headless: true };
+  if (process.env.FORBIRDS_SERVERLESS_BROWSER === '1') {
+    const packaged = require('@sparticuz/chromium').default;
+    options = { ...options, executablePath: await packaged.executablePath(), args: packaged.args.filter(arg => arg !== '--single-process' && !arg.includes('disable-web-security') && !arg.includes('allow-running-insecure-content')) };
+  }
+  const browser = await chromium.launch(options);
+  const base = process.env.FORBIRDS_TEST_URL, data = JSON.parse(process.env.FORBIRDS_UI_FIXTURE);
+  const errors = [], dialogs = [];
+  const context = await browser.newContext();
+  await context.addInitScript(() => localStorage.setItem('forbirds-language', 'en'));
+  const page = await context.newPage();
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('dialog', async dialog => { dialogs.push(dialog.type()); await dialog.dismiss(); });
+  try {
+    await page.goto(base + '/dashboard.html');
+    await page.locator('#auth-form [name=username]').fill('moderator');
+    await page.locator('#auth-form [name=password]').fill(process.env.FORBIRDS_TEST_PASSWORD);
+    await page.locator('#auth-form button[value=login]').click();
+    await page.locator('.moderation-console').waitFor();
+    assert.equal(await page.locator('.moderation-group').count(), 3);
+    assert.equal(await page.locator('.moderation-links a').count(), 6);
+    assert.equal(await page.locator('.moderation-privacy').count(), 0);
+    assert.ok(!(await page.locator('.dashboard-nav').innerText()).includes(' · '));
+    await page.locator('#queue-tab').click();
+    await page.locator('#queue-tab[aria-current=page]').waitFor();
+    await page.goto(base + '/post.html?id=' + data.a.thread_id);
+    const move = page.locator('#post-' + data.a.post_id).getByRole('button', { name: 'Move', exact: true });
+    await move.click();
+    const dialog = page.locator('#move-dialog'); await dialog.waitFor();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.ok(await move.evaluate(element => element === document.activeElement));
+    await move.click();
+    await page.locator('#move-destination').selectOption(String(data.section));
+    await page.locator('#move-reason').fill('Keep my reason on failure');
+    const endpoint = '**/api/posts/' + data.a.post_id + '/move';
+    await page.route(endpoint, route => route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: { message: 'Test move error' } }) }));
+    await page.locator('.move-submit').click();
+    await page.getByText('Test move error', { exact: true }).waitFor();
+    assert.equal(await page.locator('#move-reason').inputValue(), 'Keep my reason on failure');
+    await page.unroute(endpoint);
+    await page.locator('.move-submit').click();
+    await dialog.waitFor({ state: 'detached' });
+    await page.locator('#notice').filter({ hasText: 'Post moved.' }).waitFor();
+    const moved = (await (await page.request.get(base + '/api/threads/' + data.a.thread_id)).json()).data;
+    assert.equal(moved.section_id, data.section);
+    await page.locator('#post-' + data.reply.post_id).getByRole('button', { name: 'Move', exact: true }).click();
+    await page.locator('#move-destination').selectOption(String(data.b.thread_id));
+    assert.equal(await page.locator('#move-thread-id').inputValue(), String(data.b.thread_id));
+    await page.locator('#move-reason').fill('Move reply without browser UI');
+    await page.locator('.move-submit').click();
+    await page.locator('#post-' + data.reply.post_id).waitFor({ state: 'detached' });
+    // Resolve a reference on a later page and insert it into an existing draft at the caret.
+    await page.getByRole('link', { name: '>>' + data.target, exact: true }).click();
+    await page.locator('#post-' + data.target).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('page'), '2');
+    assert.equal(new URL(page.url()).searchParams.get('id'), String(data.b.thread_id));
+    const body = page.locator('#composer textarea[name=body]'); await body.fill('My draft');
+    await body.evaluate(element => element.setSelectionRange(element.value.length, element.value.length));
+    await page.locator('#post-' + data.target + ' .post-number').click();
+    assert.equal(await body.inputValue(), 'My draft\n>>' + data.target + '\n');
+    assert.ok(await body.evaluate(element => element === document.activeElement));
+    await page.setViewportSize({ width: 375, height: 760 });
+    await page.goto(base + '/dashboard.html?mode=queue');
+    await page.locator('.moderation-console').waitFor();
+    assert.ok(await page.locator('.moderation-console').evaluate(element => element.getBoundingClientRect().right <= innerWidth));
+    // Administrator-only group members and identity toggle remain distinct from normal navigation.
+    await page.locator('#logout').click();
+    await page.locator('#auth-form [name=username]').fill('admin');
+    await page.locator('#auth-form [name=password]').fill(process.env.FORBIRDS_TEST_PASSWORD);
+    await page.locator('#auth-form button[value=login]').click();
+    await page.locator('.moderation-privacy #show-identity').waitFor({ timeout: 8000 }).catch(async error => { throw new Error(error.message + '\n' + JSON.stringify(errors) + '\n' + await page.locator('body').innerText()); });
+    assert.equal(await page.locator('.moderation-links a').count(), 10);
+    assert.deepEqual(dialogs, []); assert.deepEqual(errors, []);
+    console.log('Moderation console, responsive layout, in-site move/cancel/error/retry, cross-page references and quote insertion: OK');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

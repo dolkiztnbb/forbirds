@@ -13,7 +13,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: pdo_sqlite, fileinfo, mbstring, gd
+          extensions: pdo_sqlite, fileinfo, mbstring, gd, zlib
           coverage: none
       - uses: actions/setup-node@v4
         with:
@@ -24,6 +24,8 @@ jobs:
         if: matrix.php == '8.5'
         run: |
           npm ci
+          npm run vendor:ruffle
+          git diff --exit-code -- public/vendor/ruffle
           npm run build:markdown
           git diff --exit-code -- public/markdown.js
           npx playwright-core install --with-deps chromium

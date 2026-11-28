@@ -764,10 +764,11 @@ final class Api
             $file['blocked'] = (bool) $blocked;
             $base = '/api/attachments/' . $file['id'];
             $file['download_url'] = $available ? $base . '/download' : null;
+            $file['is_flash'] = FlashFile::isFlash($file['mime_type'], $file['original_name']);
             $file['is_image'] = ImagePreview::isImage($file['mime_type']);
             $file['is_audio'] = MediaFile::isAudio($file['mime_type'], $file['original_name']);
             $file['is_video'] = !$file['is_audio'] && MediaFile::isVideo($file['mime_type']);
-            $file['view_url'] = $available && ($file['is_image'] || $file['is_video'] || $file['is_audio']) ? $base . '/view' : null;
+            $file['view_url'] = $available && ($file['is_image'] || $file['is_video'] || $file['is_audio'] || $file['is_flash']) ? $base . '/view' : null;
             $file['preview_url'] = $available && $file['is_image'] ? $base . '/preview' : null;
             $post['attachments'][] = $file;
         }
@@ -833,7 +834,11 @@ final class Api
             }
             $mime = $finfo->file($tmp);
             $extension = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-            if (!isset($allowed[$mime]) || !in_array($extension, $allowed[$mime], true)) {
+            if ($extension === 'swf') {
+                if (!FlashFile::validate($tmp)) $this->invalid('Некорректный SWF. Поддерживаются FWS и CWS, до 32 МиБ после распаковки.');
+                $mime = FlashFile::MIME;
+            }
+            if ($extension !== 'swf' && (!isset($allowed[$mime]) || !in_array($extension, $allowed[$mime], true))) {
                 $this->invalid('Недопустимое содержимое или расширение файла.');
             }
             if (str_starts_with($mime, 'image/')) {
@@ -862,7 +867,7 @@ final class Api
             $this->notFound();
         }
         if (($variant === 'preview' && !ImagePreview::isImage($file['mime_type']))
-            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']) && !MediaFile::isAudio($file['mime_type'], $file['original_name']))) {
+            || ($variant === 'view' && !ImagePreview::isImage($file['mime_type']) && !MediaFile::isVideo($file['mime_type']) && !MediaFile::isAudio($file['mime_type'], $file['original_name']) && !FlashFile::isFlash($file['mime_type'], $file['original_name']))) {
             $this->notFound();
         }
         session_write_close();
@@ -874,7 +879,7 @@ final class Api
             $mime = 'image/jpeg';
             $disposition = 'inline';
             $name = 'preview.jpg';
-        } elseif ($variant === 'view') {
+        } elseif ($variant === 'view' && !FlashFile::isFlash($file['mime_type'], $file['original_name'])) {
             $mime = MediaFile::playbackMime($file['mime_type'], $file['original_name']);
             $disposition = 'inline';
         }

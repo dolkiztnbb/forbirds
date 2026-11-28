@@ -277,3 +277,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .composer-emoji-options { display: flex; flex-wrap: wrap; gap: 5px; max-height: 180px; overflow-y: auto; padding: 5px 0; }
 .composer-emoji { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .composer-emoji img { width: 24px; height: 24px; object-fit: contain; }
+
+.flash-box { max-width: 100%; }
+.flash-player { max-width: 100%; }
+.attachment-flash { display: block; width: 640px; max-width: 100%; height: 480px; border: 1px solid #999; background: #222; }
+@media (max-width: 600px) { .attachment-flash { height: 320px; } }

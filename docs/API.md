@@ -707,3 +707,40 @@ codes at the caret. JSON/storage remain raw text, including unknown codes.
 Expansion happens only in Markdown inline text, including formatted text and
 colored quotes, never escaped colons, code or link destinations. Missing/removed
 catalog files leave codes as text. Profiles, titles and excerpts stay plain text.
+
+## Flash attachments (Ruffle)
+
+Uploads through the existing thread/reply multipart endpoints now accept `.swf`
+(case-insensitive extension). The server validates FWS and CWS/zlib containers:
+version/header, declared and actual uncompressed length, RECT/frame header and
+bounded tag records through End. Maximum uncompressed length: 32 MiB; ordinary
+5 MiB/file, 20 MiB/post and 10-file limits still apply. Fake/truncated containers,
+size mismatches and ZWS/LZMA return `422`. This is bounded structural validation,
+not ActionScript verification or a guarantee of Ruffle compatibility. Requires
+PHP zlib; no schema migration.
+
+Each attachment now also includes `is_flash:boolean`. A visible SWF has
+`is_flash:true`, `is_image/is_video/is_audio:false`, `preview_url:null` and a
+`view_url` of `/api/attachments/{id}/view`. Stored MIME is normalized to
+`application/x-shockwave-flash`, but **both `/view` and `/download` serve SWF as
+`application/octet-stream`, `Content-Disposition: attachment`**, never plugin
+content or HTML. `/preview` returns 404. HEAD/ranges, no-store, nosniff, parent
+visibility, premoderation and file/hash bans use the existing attachment checks.
+
+On explicit Start, the parent fetches bytes with the current session (and public
+view header in presentation mode), then transfers an ArrayBuffer via a
+source-checked postMessage handshake to `/flash-player.html`. The player has an
+opaque origin (`sandbox="allow-scripts"`, also enforced by HTTP CSP); it receives
+no API URL, tokens or account data. Ruffle's networking, URL opening and script
+access are disabled. Stop, spoiler closing and removal of the post destroy the
+iframe; already downloaded bytes cannot be retroactively revoked.
+
+The exact pinned local Ruffle JS/WASM assets alone allow CORS `*` so that an
+opaque sandbox can fetch its runtime. API/attachment CORS stays disabled. The
+player's CSP alone permits `wasm-unsafe-eval` and inline runtime styles; the forum
+page keeps its existing script restrictions and permits same-origin frames.
+External Flash resources, persistence and website JavaScript integration are not
+supported. See README for runtime update/deployment instructions and licenses.
+
+Sidebar disclosure preferences are frontend-only per-section browser storage;
+there is no new preference endpoint or change to section API visibility/counts.

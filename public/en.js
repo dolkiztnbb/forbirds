@@ -289,5 +289,15 @@ export default {
   "Эмодзи из реакций": "Reaction emoji",
   "Достигнут лимит длины сообщения.": "The post length limit has been reached.",
   "Вставить {code}": "Insert {code}",
-  "В каталоге пока нет эмодзи.": "There are no emoji in the catalog yet."
+  "В каталоге пока нет эмодзи.": "There are no emoji in the catalog yet.",
+  "Flash запускается через Ruffle. Поддерживаются не все файлы; сеть и доступ к странице отключены.": "Flash runs through Ruffle. Not all files are supported; network and page access are disabled.",
+  "Запустить Flash": "Start Flash",
+  "Остановить Flash": "Stop Flash",
+  "Загрузка Flash…": "Loading Flash…",
+  "Flash: ": "Flash: ",
+  "Не удалось запустить Flash. Возможно, файл несовместим или доступ к нему изменился.": "Could not start Flash. The file may be incompatible or access may have changed.",
+  "Flash запущен через Ruffle.": "Flash is running through Ruffle.",
+  "Flash остановлен.": "Flash stopped.",
+  "Flash под спойлером: ": "Flash under spoiler: ",
+  "Скачать Flash: ": "Download Flash: "
 };

@@ -537,7 +537,7 @@ async function loadThread() {
   const id = params.get('id');
   if (!/^[1-9][0-9]*$/.test(id || '')) throw new Error(t("Не указан номер темы. Выберите тему в ленте."));
   const data = await api('/threads/' + id + '?' + pageQuery());
-  $('#page-title').textContent = data.title; document.title = data.title + ' — ForBirds';
+  $('#page-title').textContent = data.title; document.title = data.title + ' — BirdArmageddon';
   $('#back-to-section').href = '/index.html?section_id=' + data.section_id;
   const container = $('#thread'); container.replaceChildren(renderPost(data.post, { title: data.title, threadLink: false }));
   container.append(node('hr'));
@@ -622,7 +622,7 @@ async function loadProfile() {
   const user = await api('/users/' + id);
   const data = await api(`/users/${id}/posts?` + pageQuery());
   $('#page-title').textContent = t("Профиль: ") + user.username;
-  document.title = user.username + ' — ForBirds';
+  document.title = user.username + ' — BirdArmageddon';
   $('#profile').hidden = false;
   $('#profile-name').textContent = user.username;
   $('#profile-avatar').src = user.avatar_url;

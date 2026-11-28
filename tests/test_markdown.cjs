@@ -43,5 +43,10 @@ const fs = require('node:fs');
   ]) assert.ok(!render(':like:', [fake]).includes('<img'));
   assert.ok(!render(':like:', emoji).includes('onerror='));
   assert.ok(!render(':like:').includes('<img'), 'emoji maps do not leak between posts');
+  assert.match(render('>>123'), /class="post-reference" href="\/post.html\?post=123#post-123">&gt;&gt;123<\/a>/);
+  assert.equal((render('Text >>1, **>>999999999**').match(/class="post-reference"/g) || []).length, 2);
+  for (const text of ['`>>123`', '```\n>>123\n```', '    >>123', '\\>>123', '[>>123](https://example.org)', '>>0', '>>01', '>>1234567890', '>>123abc', '>>>123']) {
+    assert.ok(!render(text).includes('class="post-reference"'), text);
+  }
   console.log('Markdown formatting, safe links, escaped HTML, no remote images, quotes and code fences: OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

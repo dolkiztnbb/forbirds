@@ -426,8 +426,18 @@ function renderPost(item, { title = '', threadLink = true, replyCount, pendingRe
   if (title) {
     const heading = node('b'); heading.append(threadLink ? link(title, '/post.html?id=' + item.thread_id) : node('span', title)); header.append(heading);
   }
-  const number = link('№' + item.id, '/post.html?id=' + item.thread_id + '#post-' + item.id);
-  number.className = 'post-number'; header.append(number);
+  const number = link('№' + item.id, '/post.html?post=' + item.id + '#post-' + item.id);
+  number.className = 'post-number'; number.title = t('Ответить на сообщение №{id}', { id: item.id });
+  number.addEventListener('click', event => {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || document.body.dataset.page !== 'post') return;
+    const textarea = $('#composer textarea[name=body]');
+    if (!textarea || $('#composer').hidden || textarea.disabled || composer?.busy || presentation() || readOnly || me?.is_banned) return;
+    event.preventDefault();
+    const prefix = textarea.selectionStart && textarea.value[textarea.selectionStart - 1] !== '\n' ? '\n' : '';
+    textarea.setRangeText(prefix + '>>' + item.id + '\n', textarea.selectionStart, textarea.selectionEnd, 'end');
+    textarea.dispatchEvent(new Event('input', { bubbles: true })); textarea.focus();
+  });
+  header.append(number);
   const time = node('time', date(item.created_at)); time.dateTime = item.created_at; header.append(time);
   if (item.status !== 'approved' || staff()) header.append(node('span', labels[item.status], 'post-status'));
   if (item.is_hidden) header.append(node('span', t('Пост скрыт'), 'post-status'));
@@ -990,6 +1000,15 @@ function adminSections() {
   options();
 }
 
+document.addEventListener('click', event => {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const reference = event.target.closest('a.post-reference');
+  if (!reference) return;
+  const id = new URL(reference.href).searchParams.get('post');
+  const target = document.getElementById('post-' + id);
+  if (target) { event.preventDefault(); history.pushState(null, '', '#post-' + id); target.scrollIntoView({ block: 'center' }); }
+});
+
 $('#auth-form').addEventListener('submit', async event => {
   event.preventDefault(); const form = event.currentTarget;
   const buttons = [...form.querySelectorAll('button')]; buttons.forEach(b => { b.disabled = true; });
@@ -1030,6 +1049,13 @@ async function main() {
   // The control page must still work while normal API endpoints are in maintenance.
   if (document.body.dataset.page === 'dashboard' && params.get('mode') === 'updates' && !presentation()) {
     await loadDashboard(); applyReadOnly(); document.documentElement.classList.add('presentation-ready'); return;
+  }
+  if (document.body.dataset.page === 'post' && params.has('post')) {
+    const id = params.get('post');
+    if (!/^[1-9][0-9]{0,8}$/.test(id || '')) throw new Error(t('Некорректный номер сообщения.'));
+    const target = await api('/posts/' + id + '/location');
+    params.delete('post'); params.set('id', target.thread_id); params.set('page', target.page);
+    history.replaceState(null, '', target.url);
   }
   reactionEmojis = await api('/reactions').catch(() => []);
   await Promise.all([loadSections(), loadNews()]);

@@ -121,6 +121,9 @@ final class Api
             if (preg_match('~^/api/threads/([1-9][0-9]*)$~D', $path, $m)) {
                 return $this->thread((int) $m[1]);
             }
+            if (preg_match('~^/api/posts/([1-9][0-9]{0,8})/location$~D', $path, $m)) {
+                return $this->postLocation((int) $m[1]);
+            }
             if (preg_match('~^/api/posts/([1-9][0-9]*)$~D', $path, $m)) {
                 return $this->postWithAttachments($this->visiblePost((int) $m[1]));
             }
@@ -525,14 +528,7 @@ final class Api
         }
         $thread['post'] = $this->postWithAttachments($this->visiblePost((int) $root['id']));
         $params = [$id];
-        $condition = "p.status = 'approved'";
-        if ($this->isStaff()) {
-            $condition = '1 = 1';
-        } elseif ($this->user) {
-            $condition = "(p.status = 'approved' OR (p.status = 'pending' AND p.user_id = ?))";
-            $params[] = $this->user['id'];
-        }
-        $condition = "($condition) AND " . $this->unrestrictedSql('p');
+        $condition = $this->replyVisibility($params);
         $replies = $this->page("SELECT p.*, u.username, u.role AS author_role, u.is_banned AS author_banned, u.avatar_name AS author_avatar_name, u.flag_file AS author_flag_file
             FROM posts p LEFT JOIN users u ON u.id = p.user_id
             WHERE p.thread_id = ? AND p.is_root = 0 AND $condition ORDER BY p.id", $params);
@@ -744,6 +740,34 @@ final class Api
             $this->audit($actor['id'], 'section.settings', 'section', $id, ['is_archived' => $archived]);
             return $this->one('SELECT * FROM sections WHERE id = ?', [$id]);
         });
+    }
+
+    /** Shared by thread pagination and permalink resolution; never count invisible replies. */
+    private function replyVisibility(array &$params): string
+    {
+        $condition = "p.status = 'approved'";
+        if ($this->isStaff()) {
+            $condition = '1 = 1';
+        } elseif ($this->user) {
+            $condition = "(p.status = 'approved' OR (p.status = 'pending' AND p.user_id = ?))";
+            $params[] = $this->user['id'];
+        }
+        return "($condition) AND " . $this->unrestrictedSql('p');
+    }
+
+    private function postLocation(int $id): array
+    {
+        $post = $this->visiblePost($id);
+        $page = 1;
+        if (!$post['is_root']) {
+            $params = [$post['thread_id']];
+            $condition = $this->replyVisibility($params);
+            $params[] = $id;
+            $count = (int) $this->one("SELECT count(*) AS total FROM posts p WHERE p.thread_id=? AND p.is_root=0 AND $condition AND p.id<=?", $params)['total'];
+            $page = max(1, (int) ceil($count / 20));
+        }
+        $url = '/post.html?id=' . $post['thread_id'] . '&page=' . $page . '#post-' . $id;
+        return ['post_id' => $id, 'thread_id' => (int) $post['thread_id'], 'page' => $page, 'url' => $url];
     }
 
     private function visiblePost(int $id): array

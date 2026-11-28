@@ -11,7 +11,7 @@ final class StaticFiles
             return false;
         }
         $file = $path === '/' ? '/index.html' : $path;
-        $pages = ['/favicon.ico','/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/banners.js', '/live-thread.js', '/post-cache.js', '/updates.js', '/markdown.js', '/presentation.js', '/section-state.js', '/flash-player.html', '/flash-player.js', '/flash-player.css', '/ujutnenko.js', '/moderation.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
+        $pages = ['/favicon.ico','/index.html', '/post.html', '/dashboard.html', '/profile.html', '/general.css', '/app.css', '/app.js', '/banners.js', '/live-thread.js', '/post-cache.js', '/updates.js', '/markdown.js', '/presentation.js', '/section-state.js', '/flash-player.html', '/flash-player.js', '/flash-player.css', '/ujutnenko.js', '/moderation.js', '/move-dialog.js', '/i18n.js', '/en.js', '/pow-worker.js', '/sha256.js'];
         $banner = null;
         if (str_starts_with($file, '/static/banners/')) {
             $catalog = (new BannerRotation(''))->all();

@@ -7,6 +7,12 @@ namespace ForBirds;
 final class Language
 {
     private const EN = [
+        'Сайт обновляется. Повторите запрос позже.' => 'The site is being updated. Try again later.',
+        'Подтвердите обновление сайта.' => 'Confirm the site update.',
+        'Неверный текущий пароль.' => 'Incorrect current password.',
+        'Обновления выключены в настройках сервера.' => 'Updates are disabled in the server configuration.',
+        'Обновление уже ожидает выполнения или требует восстановления на сервере.' => 'An update is already pending or requires server-side recovery.',
+
         'Некорректный SWF. Поддерживаются FWS и CWS, до 32 МиБ после распаковки.' => 'Invalid SWF. FWS and CWS are supported, up to 32 MiB after decompression.',
         'Для этого подключения, браузера или аккаунта доступно только чтение.' => 'This connection, browser or account has read-only access.',
         'Неизвестная реакция.' => 'Unknown reaction.',

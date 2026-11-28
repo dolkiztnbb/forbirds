@@ -2,6 +2,7 @@ import { t, locale, initLanguage } from '/i18n.js';
 import { browserSignal } from '/ujutnenko.js';
 import { moderationUI } from '/moderation.js';
 import { renderMarkdown } from '/markdown.js';
+import { siteUpdateUI } from '/updates.js';
 import { sectionOpen, rememberSection } from '/section-state.js';
 await initLanguage();
 
@@ -572,6 +573,10 @@ async function loadDashboard() {
     if (me?.is_banned) container.append(node('p', t("Аккаунт заблокирован. Публикация недоступна.")));
     return;
   }
+  if (mode === 'updates') {
+    if (!admin()) { empty(container, t('Для этого действия нужны права администратора.')); return; }
+    await siteUpdateUI(container, { node, button, api, post, readOnly }); return;
+  }
   if (mode === 'falseflags') {
     if (!admin()) { empty(container, t('Для этого действия нужны права администратора.')); return; }
     const data = await api('/admin/falseflags?' + pageQuery());
@@ -947,8 +952,12 @@ async function main() {
   presentationUI();
   const session = await api('/session'); me = session.user; readOnly = !!session.read_only; identityUI();
   moderation.setIdentity(!presentation() && session.privacy_enabled);
-  reactionEmojis = await api('/reactions').catch(() => []);
   if ($('.dashboard-nav')) moderation.navigation($('.dashboard-nav'));
+  // The control page must still work while normal API endpoints are in maintenance.
+  if (document.body.dataset.page === 'dashboard' && params.get('mode') === 'updates' && !presentation()) {
+    await loadDashboard(); applyReadOnly(); document.documentElement.classList.add('presentation-ready'); return;
+  }
+  reactionEmojis = await api('/reactions').catch(() => []);
   await Promise.all([loadSections(), loadNews()]);
   await loadView(); adminSections(); applyReadOnly();
   let message;

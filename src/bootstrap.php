@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/SiteUpdater.php';
 require_once __DIR__ . '/AbuseIdentity.php';
 require_once __DIR__ . '/MediaBans.php';
 require_once __DIR__ . '/TextBans.php';
@@ -22,6 +23,7 @@ require_once __DIR__ . '/Language.php';
 $storage = getenv('FORBIRDS_STORAGE') ?: dirname(__DIR__) . '/storage';
 return [
     'storage' => $storage,
+    'updates_enabled' => getenv('FORBIRDS_UPDATES_ENABLED') === '1',
     'database' => $storage . '/forum.sqlite',
     'secure_cookie' => getenv('FORBIRDS_SECURE_COOKIE') !== '0',
     'pow_difficulty' => max(8, min(24, (int) (getenv('FORBIRDS_POW_DIFFICULTY') ?: 18))),

@@ -18,6 +18,12 @@ header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
 header('Referrer-Policy: no-referrer');
 
 try {
+    $requestPath = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    $controlRead = $_SERVER['REQUEST_METHOD'] === 'GET' && in_array($requestPath, ['/api/session', '/api/admin/update'], true);
+    if (!$controlRead) {
+        try { $updateRequestLock = (new \ForBirds\SiteUpdater($config))->enterRequest(); }
+        catch (RuntimeException) { throw new ApiError(503, 'maintenance', 'Сайт обновляется. Повторите запрос позже.'); }
+    }
     if (!is_file($config['database']) || !is_file($config['storage'] . '/app.key')) {
         throw new ApiError(503, 'not_installed', 'Сначала выполните php bin/console.php install.');
     }

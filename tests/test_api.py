@@ -2042,6 +2042,15 @@ class ApiTests(unittest.TestCase):
         for rule in ["sandbox allow-scripts", "frame-ancestors 'self'", "object-src 'none'", "form-action 'none'", "'wasm-unsafe-eval'"]:
             self.assertIn(rule, csp)
         self.assertNotIn('allow-same-origin', csp)
+        self.assertIn("connect-src 'none'", csp)
+        self.assertNotIn("script-src 'self'", csp)
+        nonce = re.search(r"'nonce-([^']+)'", csp).group(1)
+        html = response[1].decode()
+        self.assertEqual(html.count('<script nonce="' + nonce + '">'), 2)
+        self.assertNotIn('<script src=', html)
+        self.assertNotIn('<link rel="stylesheet"', html)
+        other = self.guest.get('/flash-player.html')
+        self.assertNotIn("'nonce-" + nonce + "'", other[2]['Content-Security-Policy'])
         self.assertIsNone(response[2].get('Access-Control-Allow-Origin'))
         self.assertNotIn('wasm-unsafe-eval', self.guest.get('/')[2]['Content-Security-Policy'])
         for path in (ROOT / 'public/vendor/ruffle').glob('*'):

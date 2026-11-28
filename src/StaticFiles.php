@@ -49,13 +49,26 @@ final class StaticFiles
             header('Access-Control-Allow-Origin: *');
         }
         if ($file === '/flash-player.html') {
-            header("Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts");
+            // A single response bootstraps the opaque sandbox: no CSS/JS subrequests from it.
+            $nonce = base64_encode(random_bytes(24));
+            header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce' 'wasm-unsafe-eval'; connect-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts");
         } else {
             $ancestors = getenv('FORBIRDS_ALLOW_EMBED') === '1' ? '' : "; frame-ancestors 'none'";
             header("Content-Security-Policy: default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" . $ancestors);
         }
         if ($method !== 'HEAD') {
-            readfile($resolved);
+            if ($file === '/flash-player.html') {
+                // Only fixed, locally vendored code is embedded; never SWF or request data.
+                $html = file_get_contents($resolved);
+                $html = str_replace('<!-- player-style -->', '<style>' . file_get_contents($root . '/flash-player.css') . '</style>', $html);
+                foreach (['flash-player.js', 'vendor/ruffle/ruffle.js'] as $script) {
+                    $source = str_ireplace('</script', '<\\/script', file_get_contents($root . '/' . $script));
+                    $html = str_replace('<!-- ' . $script . ' -->', '<script nonce="' . $nonce . '">' . $source . '</script>', $html);
+                }
+                echo $html;
+            } else {
+                readfile($resolved);
+            }
         }
         return true;
     }

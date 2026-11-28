@@ -8,13 +8,21 @@ const { chromium } = require('playwright-core');
   }
   const browser = await chromium.launch(options);
   const base = process.env.FORBIRDS_TEST_URL, data = JSON.parse(process.env.FORBIRDS_FLASH_FIXTURE);
-  const errors = [], consoleErrors = [], requests = [], external = [], popups = [];
+  const errors = [], consoleErrors = [], requests = [], external = [], popups = [], sandboxRequests = [];
   try {
     const context = await browser.newContext();
     await context.addInitScript(() => { try { if (!localStorage.getItem('forbirds-language')) localStorage.setItem('forbirds-language', 'ru'); } catch { /* Opaque Flash sandbox. */ } });
     await context.route('**/*', route => {
       const url = route.request().url();
       requests.push(url);
+      // Regression: the opaque sandbox must work even when its subrequests fail.
+      if (route.request().frame().url().endsWith('/flash-player.html') && !route.request().isNavigationRequest()) {
+        sandboxRequests.push(url); return route.abort();
+      }
+      if (url.endsWith('.wasm')) {
+        assert.equal(route.request().headers().cookie, undefined, 'public WASM fetch omits session cookies');
+        assert.ok(!route.request().frame().url().endsWith('/flash-player.html'), 'WASM fetched by parent');
+      }
       if (!url.startsWith(base)) { external.push(url); return route.abort(); }
       return route.continue();
     });
@@ -68,7 +76,13 @@ const { chromium } = require('playwright-core');
     assert.equal(page.url(), url);
     assert.deepEqual(external, []);
     assert.deepEqual(popups, []);
+    assert.deepEqual(sandboxRequests, [], 'sandbox has no network subrequests');
     assert.ok(requests.some(u => u.endsWith('.wasm')), 'real local Ruffle WASM ran');
+    // This is not an arbitrary fetch proxy, even for messages from the sandbox.
+    const beforeInvalid = requests.length;
+    await frame.evaluate(() => parent.postMessage({ type: 'forbirds-flash-runtime-request', name: '../../api/session' }, '*'));
+    await page.waitForTimeout(100);
+    assert.ok(!requests.slice(beforeInvalid).some(u => u.includes('/vendor/ruffle/')), 'invalid runtime names are ignored');
     await firstPlayer.getByRole('button', { name: 'Остановить Flash', exact: true }).click();
     assert.equal(await page.locator('iframe').count(), 0);
     const spoiler = page.locator('.flash-box > details');
@@ -77,6 +91,13 @@ const { chromium } = require('playwright-core');
     await spoiler.getByText('Flash запущен через Ruffle.', { exact: true }).waitFor({ timeout: 65000 });
     await spoiler.locator('summary').click();
     await page.waitForFunction(() => !document.querySelector('iframe'));
+    // A failed WASM download exits promptly and removes the waiting sandbox.
+    await page.route('**/vendor/ruffle/*.wasm', route => route.fulfill({ status: 503, body: 'unavailable' }));
+    await firstPlayer.getByRole('button', { name: 'Запустить Flash', exact: true }).click();
+    await firstPlayer.getByText('Не удалось запустить Flash. Возможно, файл несовместим или доступ к нему изменился.', { exact: true }).waitFor();
+    assert.equal(await firstPlayer.locator('iframe').count(), 0);
+    assert.equal(await firstPlayer.getByRole('button', { name: 'Запустить Flash', exact: true }).isEnabled(), true);
+    await page.unroute('**/vendor/ruffle/*.wasm');
     // Revoked access produces a generic error and never instantiates a sandbox.
     await page.route('**' + data.file.view_url, route => route.fulfill({ status: 404, body: '{}' }));
     await firstPlayer.getByRole('button', { name: 'Запустить Flash', exact: true }).click();
